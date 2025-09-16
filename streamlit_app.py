@@ -143,10 +143,15 @@ if uploaded_files:
 
 # Показ истории сообщений (пропускаем системный)
 for msg in st.session_state.messages[1:]:
-    if isinstance(msg["content"], str):  # Обычное сообщение
-        with st.chat_message(msg["role"], avatar_icon=("👤" if msg["role"] == "user" else "🤖")):
-            st.markdown(msg["content"], unsafe_allow_html=True)
-    # Файловые: UI показан при загрузке, не дублируем
+    role = msg["role"]
+    if role not in ["user", "assistant"]:
+        continue  # пропускаем системные или неизвестные роли
+
+    content = msg["content"]
+    if isinstance(content, str):
+        with st.chat_message(role, avatar_icon=("👤" if role == "user" else "🤖")):
+            st.markdown(content, unsafe_allow_html=True)
+
 
 # Ввод текстового сообщения
 if prompt := st.chat_input("Введите сообщение или запрос... (например, 'Проанализируй код в файле')"):
