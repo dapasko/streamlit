@@ -98,11 +98,11 @@ def process_file(uploaded_file):
             page_text = page.extract_text()
             if page_text:
                 text += page_text + "\n"
-        preview = text[:500] + "..." if len(text) > 500 else text
+        preview = text[:5000] + "..." if len(text) > 5000 else text
         return f"[PDF file: {uploaded_file.name}]\n{preview}"
     elif extension in ['.txt', '.py', '.csv', '.json']:
         content = uploaded_file.read().decode("utf-8", errors="ignore")
-        preview = content[:500] + "..." if len(content) > 500 else content
+        preview = content[:5000] + "..." if len(content) > 5000 else content
         return f"[File: {uploaded_file.name}]\n{preview}"
     else:
         return f"[File: {uploaded_file.name} — unsupported type]"
@@ -155,7 +155,7 @@ if prompt := st.chat_input("Введите сообщение или запро�
                 model="openrouter/sonoma-sky-alpha" if st.session_state.model == "sonoma" else "deepseek/deepseek-chat-v3.1:free",
                 messages=api_messages,
                 temperature=0.7,
-                max_tokens=2000
+                max_tokens=20000
             )
             reply = completion.choices[0].message.content
             placeholder.markdown(reply)
