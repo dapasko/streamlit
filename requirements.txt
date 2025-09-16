@@ -2,3 +2,4 @@ streamlit
 openai
 PdfReader
 Image
+PyPDF2
