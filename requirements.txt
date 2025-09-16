@@ -3,3 +3,5 @@ openai
 PdfReader
 Image
 PyPDF2
+pandas
+mimetypes
