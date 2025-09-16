@@ -1,7 +1,5 @@
 streamlit
 openai
-PdfReader
-Image
 PyPDF2
+Pillow
 pandas
-mimetypes
