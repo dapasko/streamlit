@@ -36,6 +36,54 @@ def approx_tokens_from_text(text: str) -> int:
     b = text.encode("utf-8")
     return max(1, int(len(b) / 4))
 
+import re
+
+def render_message(role: str, content: str):
+    """
+    Красиво отображает сообщение чата (user/assistant).
+    Если есть блоки кода, выводим их отдельно с подсветкой и кнопкой копирования.
+    """
+    bg_color = "#f0f2f6" if role == "user" else "#e8f5e9"  # разные цвета для user/assistant
+
+    with st.container():
+        st.markdown(
+            f"""
+            <div style="padding: 10px; border-radius: 8px; background-color: {bg_color}; margin-bottom: 10px;">
+            <b>{'👤 Пользователь' if role == 'user' else '🤖 Ассистент'}</b>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        # Разбираем текст на блоки: обычный текст и код
+        code_pattern = r"```([\w]*)\n(.*?)```"
+        parts = re.split(code_pattern, content, flags=re.DOTALL)
+
+        # parts идёт как [текст, lang, code, текст, lang, code, ...]
+        i = 0
+        while i < len(parts):
+            if i + 2 < len(parts) and parts[i+1] != "":
+                # Это блок кода
+                lang = parts[i+1]
+                code = parts[i+2]
+                if parts[i].strip():
+                    st.markdown(parts[i])  # текст до кода
+                st.code(code, language=lang if lang else None)
+                i += 3
+            else:
+                if parts[i].strip():
+                    st.markdown(parts[i])
+                i += 1
+
+        # Кнопка копирования всего сообщения
+        st.button(
+            "📋 Скопировать сообщение",
+            key=f"copy_{role}_{hash(content)}",
+            on_click=lambda c=content: st.session_state.update({"_clipboard": c}),
+            use_container_width=True
+        )
+
+
 def safe_read_bytes(uploaded_file) -> bytes:
     uploaded_file.seek(0)
     return uploaded_file.read()
@@ -425,12 +473,8 @@ with top_cols[2]:
 chat_box = st.container()
 with chat_box:
     for msg in st.session_state.messages:
-        if msg["role"] == "user":
-            with st.chat_message("user"):
-                st.markdown(msg["content"])
-        else:
-            with st.chat_message("assistant"):
-                st.markdown(msg["content"])
+        render_message(msg["role"], msg["content"])
+
 
 # Ввод сообщения
 user_prompt = st.chat_input("Введите сообщение (русский/английский)...")
