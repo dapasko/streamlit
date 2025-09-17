@@ -563,6 +563,5 @@ if user_prompt and user_prompt.strip():
                 placeholder.markdown(err_text)
                 st.session_state.messages.append({"role": "assistant", "content": err_text})
 
-# Footer
 st.markdown("---")
 st.caption("💡 Совет: Для больших файлов (PDF/CSV/JSON) включай их по отдельности, чтобы не превысить лимит токенов. Подсветка кода работает автоматически в ответах.")
