@@ -222,59 +222,51 @@ if "api_key" not in st.session_state:
 with st.sidebar:
     st.header("⚙️ Настройки")
 
-    # Основные настройки (видны всегда, компактно)
-    st.markdown("**Модель**: " + MODEL_NAME)
-    st.caption("Окно контекста: **2 000 000** токенов.")
+    # --- Основные настройки ---
+    st.markdown(f"**Модель:** `{MODEL_NAME}`")
+    st.caption(f"Контекст: до **{MODEL_CONTEXT_TOKENS:,}** токенов")
 
     col1, col2 = st.columns(2)
     with col1:
-        st.session_state.max_tokens = st.slider(
-            "📏 Max tokens (ответ)",
+        st.session_state.max_tokens = st.number_input(
+            "📏 Max tokens",
             min_value=256,
             max_value=MODEL_CONTEXT_TOKENS,
             value=st.session_state.max_tokens,
             step=256,
-            help="Макс. токенов в ответе. Input + output ≤ 2M."
         )
     with col2:
         st.session_state.temperature = st.slider(
-            "🎨 Temperature",
+            "🎨 Temp",
             min_value=0.0,
             max_value=1.5,
             value=st.session_state.temperature,
             step=0.05,
-            help="0.0 — точные, 1.5 — креативные ответы."
         )
 
-    # Режим истории (чекбокс + input, компактно)
-    col_hist1, col_hist2 = st.columns([3, 2])
-    with col_hist1:
+    colh1, colh2 = st.columns([3, 2])
+    with colh1:
         st.session_state.use_full_history = st.checkbox(
-            "📚 Вся история в контексте",
-            value=st.session_state.use_full_history
+            "📚 Вся история", value=st.session_state.use_full_history
         )
-    with col_hist2:
+    with colh2:
         if not st.session_state.use_full_history:
             st.session_state.limit_messages = st.number_input(
-                "Последние N сообщений",
-                min_value=1, max_value=5000, value=st.session_state.limit_messages,
-                help="Ограничение истории для экономии токенов."
+                "N сообщений",
+                min_value=1,
+                max_value=5000,
+                value=st.session_state.limit_messages,
             )
 
-    # Разделитель минимальный
     st.markdown("---")
 
-    # Файлы — в expander (сворачивается)
-    with st.expander("📁 Файлы (загрузка и управление)", expanded=False):
-        st.caption("Загружай файлы — выбирай, какие включать в контекст.")
-
+    # --- Файлы ---
+    with st.expander("📂 Файлы", expanded=False):
         uploaded_files = st.file_uploader(
-            "📁 Загрузить файлы (multi)",
+            "Загрузить файлы",
+            type=['txt','pdf','jpg','jpeg','png','csv','json','py','md','log'],
             accept_multiple_files=True,
-            type=['txt', 'pdf', 'jpg', 'jpeg', 'png', 'csv', 'json', 'py', 'md', 'log'],
-            help="Поддержка: текст, PDF, изображения, CSV, JSON, Python, Markdown. Макс. 50MB/файл."
         )
-
         if uploaded_files:
             for uf in uploaded_files:
                 try:
@@ -289,59 +281,52 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Ошибка загрузки {uf.name}: {e}")
 
-        # Список файлов (компактный)
-        if st.session_state.files:
-            for i, f in enumerate(st.session_state.files):
-                cols = st.columns([5, 1, 1])  # Уменьшил ширину preview
-                with cols[0]:
-                    st.markdown(f"**{f['name']}** ({f['type']}, {f['size']} bytes)")
-                    st.text_area(f"preview_{i}", value=f.get("preview", "")[:1000], height=60, key=f"preview_{i}", label_visibility="collapsed")  # Скрыл лейбл, уменьшил высоту
-                with cols[1]:
-                    inc = st.checkbox("Включить", value=f.get("include", True), key=f"inc_{i}")
-                    st.session_state.files[i]["include"] = inc
-                    if inc and f["name"] not in st.session_state.include_files:
-                        st.session_state.include_files.append(f["name"])
-                    if not inc and f["name"] in st.session_state.include_files:
-                        st.session_state.include_files.remove(f["name"])
-                with cols[2]:
-                    if st.button("❌", key=f"del_{i}", help="Удалить"):
-                        st.session_state.files.pop(i)
-                        st.session_state.include_files = [n for n in st.session_state.include_files if n != f["name"]]
-                        st.rerun()
+        for i, f in enumerate(st.session_state.files):
+            with st.expander(f"📄 {f['name']} ({f['type']}, {f['size']}b)"):
+                st.checkbox(
+                    "Включить в контекст",
+                    value=f.get("include", True),
+                    key=f"inc_{i}"
+                )
+                st.text_area(
+                    "preview",
+                    value=f.get("preview", "")[:800],
+                    height=100,
+                    label_visibility="collapsed"
+                )
+                if st.button("❌ Удалить", key=f"del_{i}"):
+                    st.session_state.files.pop(i)
+                    st.session_state.include_files = [
+                        n for n in st.session_state.include_files if n != f["name"]
+                    ]
+                    st.rerun()
 
-    # Минимальный разделитель
-    st.markdown("---")
-
-    # Системный промпт — в expander
-    with st.expander("🔧 Системный промпт", expanded=False):
+    # --- Системный промпт ---
+    with st.expander("📝 Системный промпт", expanded=False):
         st.session_state.system_prompt = st.text_area(
-            label="System prompt (как system message)",
+            "System prompt",
             value=st.session_state.system_prompt,
-            height=100,  # Уменьшил высоту
-            help="По умолчанию: 'You are Sonoma, an experienced fullstack Python developer...'"
+            height=120,
         )
 
-    # Минимальный разделитель
-    st.markdown("---")
-
-    # Экспорт/импорт — в expander
-    with st.expander("💾 Экспорт/импорт чата", expanded=False):
-        col_exp1, col_exp2 = st.columns(2)
-        with col_exp1:
-            if st.button("🔁 Экспорт (JSON)"):
-                data = {
+    # --- Экспорт / Импорт ---
+    with st.expander("💾 Экспорт / Импорт", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Экспорт JSON"):
+                export_data = {
                     "messages": st.session_state.messages,
                     "files": [{k: v for k, v in f.items() if k != "content"} for f in st.session_state.files],
-                    "system_prompt": st.session_state.system_prompt
+                    "system_prompt": st.session_state.system_prompt,
                 }
                 st.download_button(
-                    label="Скачать JSON",
-                    data=json.dumps(data, ensure_ascii=False, indent=2),
-                    file_name="chat_export.json",
-                    mime="application/json"
+                    "Скачать",
+                    data=json.dumps(export_data, ensure_ascii=False, indent=2),
+                    file_name="chat.json",
+                    mime="application/json",
                 )
-        with col_exp2:
-            uploaded_chat = st.file_uploader("Импорт (JSON)", type=["json"], key="upload_chat")
+        with col2:
+            uploaded_chat = st.file_uploader("Импорт JSON", type="json")
             if uploaded_chat:
                 try:
                     raw = safe_read_bytes(uploaded_chat).decode("utf-8", errors="ignore")
@@ -365,51 +350,30 @@ with st.sidebar:
                 except Exception as e:
                     st.error("Ошибка импорта: " + str(e))
 
-    # Минимальный разделитель
-    st.markdown("---")
-
-    # Управление чатом — в expander (улучшенный вид: компактные кнопки, инфо в markdown)
+    # --- Управление чатом ---
     with st.expander("🛠️ Управление чатом", expanded=False):
-        bot_cols = st.columns(3)  # Убрал [1,1,1] на равные
-        with bot_cols[0]:
+        col1, col2 = st.columns(2)
+        with col1:
             if st.button("🔁 Повторить последний"):
-                last_user = None
-                for m in reversed(st.session_state.messages):
-                    if m["role"] == "user":
-                        last_user = m["content"]
-                        break
+                last_user = next((m["content"] for m in reversed(st.session_state.messages) if m["role"] == "user"), None)
                 if last_user:
                     st.session_state.messages.append({"role": "user", "content": last_user, "ts": time.time()})
                     st.rerun()
-                else:
-                    st.info("Нет пользовательского сообщения.")
-        with bot_cols[1]:
-            if st.button("💾 Сохранить (TXT)"):
-                buf = io.StringIO()
-                for m in st.session_state.messages:
-                    role = "User" if m["role"] == "user" else "Assistant"
-                    ts = m.get("ts", "")
-                    buf.write(f"{role} ({ts}):\n{m['content']}\n\n")
-                st.download_button(
-                    label="Скачать TXT",
-                    data=buf.getvalue(),
-                    file_name="chat.txt",
-                    mime="text/plain"
-                )
-        with bot_cols[2]:
+        with col2:
             if st.button("📥 Очистить последний"):
                 if st.session_state.messages:
                     st.session_state.messages.pop()
                     st.rerun()
+        st.button("🗑️ Очистить весь чат", on_click=lambda: st.session_state.update({"messages": []}))
+        st.button("🗑️ Удалить все файлы", on_click=lambda: st.session_state.update({"files": [], "include_files": []}))
 
-        # Инфо модели: в компактном markdown
-        st.markdown("**Инфо модели:**")
-        st.markdown("""
-        - **Модель**: openrouter/sonoma-sky-alpha  
-        - **Контекст**: до 2M токенов  
-        - **Настройка**: max tokens/temperature для длины/креативности.  
-        - **Файлы**: Включай по отдельности для больших объёмов.
-        """)
+    # --- Инфо о модели ---
+    st.info(
+        "🤖 **Модель**: openrouter/sonoma-sky-alpha\n"
+        f"📏 Контекст: до {MODEL_CONTEXT_TOKENS:,} токенов\n"
+        "📂 Файлы: включай выборочно, чтобы экономить контекст"
+    )
+
 
 # =========================
 # Создаём клиента OpenAI (OpenRouter)
