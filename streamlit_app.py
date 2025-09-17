@@ -196,180 +196,102 @@ st.set_page_config(page_title="🤖 Мульти-Чат (Sonoma)", page_icon="�
 # Custom CSS для мобильного и темной темы (улучшенная версия)
 st.markdown("""
 <style>
-    /* Основной контейнер */
-    [data-testid="stAppViewContainer"] {
-        background-color: #0e1117;
-    }
+/* ===== Общие настройки ===== */
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+    color: #e4e6eb;
+}
 
-    /* Sidebar: полностью темная тема */
-    .stSidebar {
-        background-color: #0e1117 !important;
-        color: #fafafa !important;
-    }
-    .stSidebar [data-testid="stSidebar"] {
-        background-color: #0e1117;
-    }
-    .stSidebar .css-1d391kg {
-        background-color: #0e1117;
-    }
-    .stSidebar h1, .stSidebar h2, .stSidebar h3, .stSidebar p, .stSidebar label {
-        color: #fafafa !important;
-    }
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+}
 
-    /* Мобильный просмотр: адаптивные отступы и колонки */
-    @media (max-width: 600px) {
-        .main .block-container {
-            padding-top: 1rem !important;
-            padding-bottom: 1rem !important;
-            padding-left: 0.5rem !important;
-            padding-right: 0.5rem !important;
-        }
-        .stSidebar {
-            width: 100% !important;
-            background-color: #0e1117 !important;
-        }
-        .css-1d391kg {  /* Колонки на мобильном стекутся */
-            display: block !important;
-        }
-        .stButton > button {
-            width: 100% !important;
-            margin-bottom: 0.5rem;
-        }
-        .stTextArea {
-            height: 60px !important;  /* Уменьшить высоту preview на мобильном */
-        }
-    }
+/* ===== Чат ===== */
+.stChatMessage {
+    border-radius: 16px;
+    padding: 12px 16px;
+    margin: 6px 0;
+    max-width: 85%;
+    font-size: 0.95rem;
+    line-height: 1.4;
+}
 
-    /* Темная тема: улучшенный контраст для текста и элементов */
-    [theme=dark] .stMarkdown {
-        color: #fafafa !important;
-    }
-    [theme=dark] .stText {
-        color: #e1e5e9 !important;
-    }
-    [theme=dark] .stError {
-        color: #ff6b6b !important;
-        background-color: #2d1b1b;
-    }
-    [theme=dark] .stWarning {
-        color: #ffd93d !important;
-        background-color: #2d2b1b;
-    }
-    [theme=dark] .stSuccess {
-        color: #10b981 !important;
-        background-color: #1a2f1a;
-    }
-    [theme=dark] .stInfo {
-        color: #3b82f6 !important;
-        background-color: #1a2332;
-    }
+/* Пользователь */
+.stChatMessage[data-testid="stChatMessage-user"] {
+    background: #2563eb;
+    color: white;
+    margin-left: auto;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+}
 
-    /* Кнопки: темная тема */
-    [theme=dark] .stButton > button {
-        background-color: #1f2937;
-        color: #fafafa;
-        border: 1px solid #374151;
-        border-radius: 0.5rem;
-        padding: 0.5rem 1rem;
-    }
-    [theme=dark] .stButton > button:hover {
-        background-color: #374151;
-        border-color: #4b5563;
-    }
-    [theme=light] .stButton > button {
-        background-color: #f3f4f6;
-        color: #374151;
-        border: 1px solid #d1d5db;
-        border-radius: 0.5rem;
-    }
+/* Ассистент */
+.stChatMessage[data-testid="stChatMessage-assistant"] {
+    background: #1f2937;
+    color: #e5e7eb;
+    margin-right: auto;
+    border: 1px solid #374151;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
 
-    /* Слайдеры и инпуты в темной теме */
-    [theme=dark] .stSlider > div > div > div {
-        background-color: #1f2937;
-    }
-    [theme=dark] .stNumberInput input {
-        background-color: #1f2937;
-        color: #fafafa;
-        border: 1px solid #374151;
-    }
-    [theme=dark] .stTextArea textarea {
-        background-color: #1f2937;
-        color: #fafafa;
-        border: 1px solid #374151;
-    }
-    [theme=dark] .stTextInput input {
-        background-color: #1f2937;
-        color: #fafafa;
-        border: 1px solid #374151;
-    }
-    [theme=dark] .stCheckbox > label {
-        color: #e1e5e9;
-    }
-    [theme=dark] .stFileUploader label {
-        color: #e1e5e9;
-    }
+/* ===== Sidebar ===== */
+.stSidebar {
+    background: #111827 !important;
+    color: #e5e7eb !important;
+    border-right: 1px solid #1f2937;
+}
+.stSidebar h1, .stSidebar h2, .stSidebar h3, .stSidebar label {
+    color: #f3f4f6 !important;
+}
 
-    /* Чат сообщения */
-    [theme=dark] .stChatMessage {
-        background-color: #1f2937;
-        border: 1px solid #374151;
-        border-radius: 0.75rem;
-        padding: 1rem;
-        margin-bottom: 0.5rem;
-    }
-    [theme=light] .stChatMessage {
-        background-color: #f3f4f6;
-        border: 1px solid #d1d5db;
-        border-radius: 0.75rem;
-        padding: 1rem;
-        margin-bottom: 0.5rem;
-    }
+/* ===== Карточки (expanders) ===== */
+.stExpander {
+    border-radius: 12px;
+    border: 1px solid #334155;
+    background: #1e293b;
+    margin-bottom: 8px !important;
+}
+.stExpander > div > div {
+    background: transparent !important;
+}
 
-    /* Общие улучшения */
-    .stChatInput input {
-        border-radius: 0.5rem;
-        background-color: #1f2937;
-        color: #fafafa;
-        border: 1px solid #374151;
-    }
+/* ===== Кнопки ===== */
+.stButton > button {
+    border-radius: 8px;
+    font-weight: 500;
+    transition: 0.2s;
+    border: none;
+    padding: 0.6rem 1rem;
+}
+.stButton > button:hover {
+    transform: translateY(-1px);
+}
+.stButton > button:active {
+    transform: scale(0.98);
+}
 
-    /* Expander'ы: компактные, с минимальными отступами */
-    .stExpander {
-        border: 1px solid #374151;
-        border-radius: 0.5rem;
-        margin-bottom: 0.25rem !important;  /* Уменьшенное пространство между expanders */
-        padding: 0.25rem;
-    }
-    .stExpander > label {
-        color: #e1e5e9 !important;
-        font-weight: bold;
-    }
-    .stExpander > div > div > div {
-        background-color: #1f2937;  /* Тёмный фон для содержимого в тёмной теме */
-        padding: 0.5rem;
-        border-radius: 0.25rem;
-    }
-    [theme=light] .stExpander > div > div > div {
-        background-color: #f9fafb;
-    }
-    .css-1d391kg {  /* Для мобильного: expander'ы не ломаются */
-        display: block !important;
-    }
-    @media (max-width: 600px) {
-        .stExpander {
-            margin-bottom: 0.5rem !important;
-        }
-    }
+/* Цветные кнопки */
+.stButton > button[kind="primary"] {
+    background: #2563eb;
+    color: white;
+}
+.stButton > button[kind="secondary"] {
+    background: #475569;
+    color: #f9fafb;
+}
 
-    /* Колонки: уменьшить отступы */
-    .row-widget.stHorizontal {
-        gap: 0.5rem;
-    }
+/* ===== Inputs ===== */
+.stTextArea textarea, .stTextInput input {
+    border-radius: 8px;
+    border: 1px solid #374151;
+    background: #111827;
+    color: #e5e7eb;
+}
+.stSlider > div > div > div {
+    background: #2563eb !important;
+}
 
-    /* Markdown в sidebar: темный фон */
-    .stMarkdown {
-        background-color: transparent;
-    }
+/* ===== Footer ===== */
+footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
