@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 from openai import OpenAI
 import io
@@ -194,6 +193,81 @@ def estimate_total_tokens(messages: List[Dict[str, str]]) -> int:
 # =========================
 st.set_page_config(page_title="🤖 Мульти-Чат (Sonoma)", page_icon="🤖", layout="wide")
 
+# Custom CSS для мобильного и темной темы
+st.markdown("""
+<style>
+    /* Мобильный просмотр: адаптивные отступы и колонки */
+    @media (max-width: 600px) {
+        .main .block-container {
+            padding-top: 1rem !important;
+            padding-bottom: 1rem !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+        .stSidebar {
+            width: 100% !important;
+        }
+        .css-1d391kg {  /* Колонки на мобильном стекутся */
+            display: block !important;
+        }
+        .stButton > button {
+            width: 100% !important;
+            margin-bottom: 0.5rem;
+        }
+        .stTextArea {
+            height: 60px !important;  /* Уменьшить высоту preview на мобильном */
+        }
+    }
+
+    /* Темная тема: улучшенный контраст */
+    [data-testid="stAppViewContainer"] {
+        background-color: #0e1117;
+    }
+    [theme=dark] .stMarkdown {
+        color: #fafafa !important;
+    }
+    [theme=dark] .stText {
+        color: #e1e5e9 !important;
+    }
+    [theme=dark] .stError {
+        color: #ff6b6b !important;
+        background-color: #2d1b1b;
+    }
+    [theme=dark] .stWarning {
+        color: #ffd93d !important;
+        background-color: #2d2b1b;
+    }
+    [theme=dark] .stButton > button {
+        background-color: #1f2937;
+        color: #fafafa;
+        border-radius: 0.5rem;
+    }
+    [theme=dark] .stButton > button:hover {
+        background-color: #374151;
+    }
+    [theme=dark] .stChatMessage {
+        background-color: #1f2937;
+        border-radius: 0.75rem;
+        padding: 1rem;
+        margin-bottom: 0.5rem;
+    }
+    [theme=light] .stChatMessage {
+        background-color: #f3f4f6;
+        border-radius: 0.75rem;
+        padding: 1rem;
+        margin-bottom: 0.5rem;
+    }
+
+    /* Общие улучшения */
+    .stChatInput input {
+        border-radius: 0.5rem;
+    }
+    .stExpander {
+        border-radius: 0.5rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 if "messages" not in st.session_state:
     st.session_state.messages = []  # список dict {"role": "user"/"assistant", "content": "...", "ts": ...}
 if "files" not in st.session_state:
@@ -302,14 +376,14 @@ with st.sidebar:
                     st.session_state.files.pop(i)
                     # синхронизировать include_files
                     st.session_state.include_files = [n for n in st.session_state.include_files if n != f["name"]]
-                    st.experimental_rerun()
+                    st.rerun()
 
     st.markdown("---")
     st.subheader("Системный промпт")
     st.session_state.system_prompt = st.text_area("System prompt (используется как system message)", value=st.session_state.system_prompt, height=120)
 
     st.markdown("---")
-    st.write("Экспорт/импорт чата")
+    st.subheader("Экспорт/импорт чата")
     if st.button("🔁 Экспортировать чат (JSON)"):
         data = {
             "messages": st.session_state.messages,
@@ -343,6 +417,44 @@ with st.sidebar:
         except Exception as e:
             st.error("Ошибка импорта: " + str(e))
 
+    # Нижняя панель управления чатом (вынесена в sidebar)
+    with st.expander("🛠️ Управление чатом", expanded=False):
+        bot_cols = st.columns([1, 1, 1])
+        with bot_cols[0]:
+            if st.button("🔁 Повторить последний ответ"):
+                # попытаемся повторно послать последний пользовательский запрос (если есть)
+                last_user = None
+                for m in reversed(st.session_state.messages):
+                    if m["role"] == "user":
+                        last_user = m["content"]
+                        break
+                if last_user:
+                    # добавим копию user в конец и перезапустим (упрощённый путь: имитируем ввод)
+                    st.session_state.messages.append({"role": "user", "content": last_user, "ts": time.time()})
+                    st.rerun()
+                else:
+                    st.info("Нет пользовательского сообщения для повтора.")
+        with bot_cols[1]:
+            if st.button("💾 Сохранить чат (TXT)"):
+                buf = io.StringIO()
+                for m in st.session_state.messages:
+                    role = "User" if m["role"] == "user" else "Assistant"
+                    ts = m.get("ts", "")
+                    buf.write(f"{role} ({ts}):\n{m['content']}\n\n")
+                st.download_button("Скачать TXT", data=buf.getvalue(), file_name="chat.txt", mime="text/plain")
+        with bot_cols[2]:
+            if st.button("📥 Очистить последний"):
+                if st.session_state.messages:
+                    st.session_state.messages.pop()
+                    st.rerun()
+        st.markdown("**Информация модели / подсказки**")
+        st.write(
+            " - Модель: openrouter/sonoma-sky-alpha\n"
+            " - Контекст до 2M токенов (приблизительно)\n"
+            " - Если ответы кажутся слишком длинными/короткими — настраивай Max tokens и Temperature.\n"
+            " - Для анализа больших файлов включай их в контекст (чекбокс 'Включить')."
+        )
+
 # =========================
 # Создаём клиента OpenAI (OpenRouter)
 # =========================
@@ -356,26 +468,24 @@ def get_client(api_key: str) -> Optional[OpenAI]:
         return None
 
 client = get_client(st.session_state.api_key)
-if client is None:
-    st.warning("Укажите корректный OPENROUTER_API_KEY в сайдбаре, чтобы отправлять запросы к модели.")
 
 # =========================
 # Основная область — чат
 # =========================
 st.title("🤖 Мульти-Чат (Sonoma) — упрощённая и улучшенная версия")
-st.caption("Модель: openrouter/sonoma-sky-alpha — окно контекста до 2M токенов. Все настройки слева.")
+st.caption("Модель: openrouter/sonoma-sky-alpha — окно контекста до 2M токенов. Все настройки в боковой панели.")
 
-# Панель управления чатом: кнопки очистки, экспорт
+# Панель управления чатом: кнопки очистки, экспорт (в main, но упрощена)
 top_cols = st.columns([1, 1, 4])
 with top_cols[0]:
     if st.button("🗑️ Очистить чат"):
         st.session_state.messages = []
-        st.experimental_rerun()
+        st.rerun()
 with top_cols[1]:
     if st.button("🗑️ Стереть файлы"):
         st.session_state.files = []
         st.session_state.include_files = []
-        st.experimental_rerun()
+        st.rerun()
 with top_cols[2]:
     # индикатор примерной оценки токенов для текущего контекста
     api_messages_preview = build_api_messages(
@@ -388,7 +498,7 @@ with top_cols[2]:
     )
     approx_tokens = estimate_total_tokens(api_messages_preview)
     st.markdown(f"**Оценка токенов входного контекста:** ~**{approx_tokens:,}** токенов.  (макс {MODEL_CONTEXT_TOKENS:,})")
-    if approx_tokens + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS:
+    if approx_tokens + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS * 1.1:  # Буфер 10%
         st.error("Внимание: входной контекст + максимальные токены ответа превышают окно модели (2M). Уменьши историю/файлы или max_tokens.")
 
 # Вывод предыдущих сообщений в виде чата
@@ -403,10 +513,10 @@ with chat_box:
                 st.markdown(msg["content"])
 
 # =========================
-# Ввод нового сообщения
+# Ввод нового сообщения (в main)
 # =========================
 user_prompt = st.chat_input("Введите сообщение (русский/английский)...")
-if user_prompt:
+if user_prompt and user_prompt.strip():  # Проверка на пустой ввод
     # добавляем сообщение в историю
     st.session_state.messages.append({"role": "user", "content": user_prompt, "ts": time.time()})
     # отобразить сразу как пользователь
@@ -430,13 +540,13 @@ if user_prompt:
 
         # Оценка токенов
         approx_in_tokens = estimate_total_tokens(api_messages)
-        if approx_in_tokens + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS:
+        if approx_in_tokens + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS * 1.1:  # Буфер 10%
             # пробуем автоматически сократить: если не используем всю историю — сократить до limit_messages
             if st.session_state.use_full_history:
                 # предупредить и не отправлять
                 placeholder.markdown(
                     "⚠️ Размер контекста слишком большой (вместе с ожидаемым ответом превышает окно модели в 2M токенов). "
-                    "Включен режим: использовать всю историю. Пожалуйста, отключи 'Использовать всю историю' в сайдбаре или уменьшь количество файлов/их включение."
+                    "Включен режим: использовать всю историю. Пожалуйста, отключи 'Использовать всю историю' в боковой панели или уменьшь количество файлов/их включение."
                 )
                 st.session_state.messages.append({"role": "assistant", "content": "⚠️ Запрос не отправлен — контекст превышает лимит модели."})
             else:
@@ -455,20 +565,15 @@ if user_prompt:
                 )
                 approx_in_tokens = estimate_total_tokens(api_messages)
                 # если всё ещё слишком большой — отказываемся
-                if approx_in_tokens + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS:
+                if approx_in_tokens + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS * 1.1:
                     placeholder.markdown(
                         "❌ Всё ещё превышает лимит. Уменьши число файлов, отключи некоторые файлы из контекста, либо уменьшай max_tokens."
                     )
                     st.session_state.messages.append({"role": "assistant", "content": "❌ Запрос не отправлен — контекст превышает лимит модели."})
-                    st.experimental_rerun()
-
-        # Если клиент не настроен
-        if client is None:
-            placeholder.markdown("⚠️ Клиент не настроен: укажите OPENROUTER_API_KEY в сайдбаре.")
-            st.session_state.messages.append({"role": "assistant", "content": "⚠️ Клиент не настроен — укажите API ключ."})
+                    st.rerun()
         else:
             try:
-                # Отправляем запрос
+                # Отправляем запрос (предполагаем, что client готов)
                 resp = client.chat.completions.create(
                     model=MODEL_NAME,
                     messages=api_messages,
@@ -492,50 +597,7 @@ if user_prompt:
                 st.session_state.messages.append({"role": "assistant", "content": err_text})
 
 # =========================
-# Нижняя панель: функции управления чатом
-# =========================
-st.markdown("---")
-bot_cols = st.columns([1, 1, 1, 2])
-with bot_cols[0]:
-    if st.button("🔁 Повторить последний ответ"):
-        # попытаемся повторно послать последний пользовательский запрос (если есть)
-        last_user = None
-        for m in reversed(st.session_state.messages):
-            if m["role"] == "user":
-                last_user = m["content"]
-                break
-        if last_user:
-            # удалим последний ассистентский ответ, если есть
-            # добавим копию user в конец и перезапустим (упрощённый путь: имитируем ввод)
-            st.session_state.messages.append({"role": "user", "content": last_user, "ts": time.time()})
-            st.experimental_rerun()
-        else:
-            st.info("Нет пользовательского сообщения для повтора.")
-with bot_cols[1]:
-    if st.button("💾 Сохранить чат (TXT)"):
-        buf = io.StringIO()
-        for m in st.session_state.messages:
-            role = "User" if m["role"] == "user" else "Assistant"
-            ts = m.get("ts", "")
-            buf.write(f"{role} ({ts}):\n{m['content']}\n\n")
-        st.download_button("Скачать TXT", data=buf.getvalue(), file_name="chat.txt", mime="text/plain")
-with bot_cols[2]:
-    if st.button("📥 Очистить последний"):
-        if st.session_state.messages:
-            st.session_state.messages.pop()
-            st.experimental_rerun()
-with bot_cols[3]:
-    st.markdown("**Информация модели / подсказки**")
-    st.write(
-        " - Модель: openrouter/sonoma-sky-alpha\n"
-        " - Контекст до 2M токенов (приблизительно)\n"
-        " - Если ответы кажутся слишком длинными/короткими — настраивай Max tokens и Temperature.\n"
-        " - Для анализа больших файлов включай их в контекст (чекбокс 'Включить' в сайдбаре)."
-    )
-
-# =========================
-# Footer: подсказки
+# Footer: подсказки (в main)
 # =========================
 st.markdown("---")
 st.caption("Совет: если используешь большие PDF/CSV/JSON, включай их по отдельности в контекст — иначе суммарный объём текста может превысить окно модели.")
-
