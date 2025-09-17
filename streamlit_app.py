@@ -11,42 +11,29 @@ from typing import List, Dict, Any, Optional
 import time
 import base64
 import os
-import logging
-
-# Logging
-logging.basicConfig(level=logging.INFO)
-
-# Установка tiktoken для точной оценки токенов (pip install tiktoken)
-try:
-    import tiktoken
-    TIKTOKEN_AVAILABLE = True
-except ImportError:
-    TIKTOKEN_AVAILABLE = False
-    st.warning("Установи tiktoken для точной оценки токенов: pip install tiktoken")
 
 # =========================
 # Конфиги
 # =========================
 MODEL_NAME = "openrouter/sonoma-sky-alpha"
-MODEL_CONTEXT_TOKENS = 2_000_000
+MODEL_CONTEXT_TOKENS = 2_000_000  # окно контекста модели (в токенах) — указано пользователем
 DEFAULT_MAX_TOKENS_RESPONSE = 200000
 DEFAULT_TEMPERATURE = 0.7
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
-MAX_FILES = 10
 
 # =========================
 # Утилиты
 # =========================
 def approx_tokens_from_text(text: str) -> int:
-    if TIKTOKEN_AVAILABLE:
-        try:
-            enc = tiktoken.get_encoding("cl100k_base")
-            return len(enc.encode(text))
-        except:
-            pass
-    # Fallback
+    """
+    Примерная оценка количества токенов в тексте.
+    Правило: ~4 символа на токен или ~1 token = 4 символа (приближённо).
+    Более консервативная оценка: 1 токен ~ 4 байта символов ASCII.
+    Это **приближённо**, но даёт представление.
+    """
     if not text:
         return 0
+    # учитываем, что некоторые символы (Unicode) могут занимать больше байт;
+    # переводим в utf-8 длину в байтах
     b = text.encode("utf-8")
     return max(1, int(len(b) / 4))
 
@@ -60,20 +47,26 @@ def text_download_link(text: str, filename: str, label: str = "Скачать"):
     st.markdown(f"[{label}]({href})", unsafe_allow_html=True)
 
 # =========================
-# Обработка файлов
+# Обработка файлов (функции)
 # =========================
 @st.cache_data
 def process_file_bytes(name: str, file_bytes: bytes) -> Dict[str, Any]:
+    """
+    Обрабатываем файл по байтам и возвращаем структуру:
+    {
+        "name": str,
+        "content": str,  # текстовое содержимое (для отправки в контекст)
+        "type": str,     # csv, pdf, image, txt, json, py, unknown
+        "preview": str,  # предпросмотр (короткий)
+        "size": int
+    }
+    """
     mime_type, _ = mimetypes.guess_type(name)
     extension = os.path.splitext(name)[1].lower()
     file_type = "unknown"
     content = ""
     preview = ""
-    image_data = None  # Для миниатюр изображений (base64)
     size = len(file_bytes)
-
-    if size > MAX_FILE_SIZE:
-        return {"name": name, "content": f"[Файл {name} слишком большой: {size} bytes (>50MB)]", "type": "error", "preview": "", "size": size, "image_data": None}
 
     try:
         if extension in [".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"]:
@@ -82,11 +75,6 @@ def process_file_bytes(name: str, file_bytes: bytes) -> Dict[str, Any]:
                 img = Image.open(io.BytesIO(file_bytes))
                 content = f"[Image {name} — {img.size[0]}x{img.size[1]} px]"
                 preview = content
-                # Base64 для миниатюры
-                buffered = io.BytesIO()
-                img.thumbnail((200, 200))  # Масштабируем для preview
-                img.save(buffered, format="PNG")
-                image_data = base64.b64encode(buffered.getvalue()).decode()
             except Exception as e:
                 content = f"[Image {name} — unable to open: {e}]"
                 preview = content
@@ -101,15 +89,15 @@ def process_file_bytes(name: str, file_bytes: bytes) -> Dict[str, Any]:
                     text_parts.append(page_text)
                 text = "\n".join(text_parts)
                 content = text
-                preview = text[:500] + ("..." if len(text) > 500 else "")
+                preview = text[:1000] + ("..." if len(text) > 1000 else "")
             except Exception as e:
-                content = f"[PDF {name} — error: {e}]"
+                content = f"[PDF {name} — error extracting text: {e}]"
                 preview = content
 
         elif extension in [".txt", ".py", ".md", ".log"]:
             file_type = "text"
             content = file_bytes.decode("utf-8", errors="ignore")
-            preview = content[:500] + ("..." if len(content) > 500 else "")
+            preview = content[:1000] + ("..." if len(content) > 1000 else "")
 
         elif extension == ".csv":
             file_type = "csv"
@@ -117,9 +105,9 @@ def process_file_bytes(name: str, file_bytes: bytes) -> Dict[str, Any]:
             content = text
             try:
                 df = pd.read_csv(io.StringIO(text))
-                preview = f"CSV: {len(df)} rows, cols: {list(df.columns)}\n{df.head(3).to_csv(index=False)}"
-            except:
-                preview = text[:500] + ("..." if len(text) > 500 else "")
+                preview = f"CSV {name}: {len(df)} rows, columns: {list(df.columns)}\n" + df.head(5).to_csv(index=False)
+            except Exception:
+                preview = text[:1000] + ("..." if len(text) > 1000 else "")
 
         elif extension == ".json":
             file_type = "json"
@@ -127,46 +115,63 @@ def process_file_bytes(name: str, file_bytes: bytes) -> Dict[str, Any]:
             content = text
             try:
                 data = json.loads(text)
-                preview = json.dumps(data, ensure_ascii=False, indent=2)[:500] + ("..." if len(text) > 500 else "")
-            except:
-                preview = text[:500] + ("..." if len(text) > 500 else "")
+                preview = json.dumps(data, ensure_ascii=False, indent=2)[:1000] + ("..." if len(text) > 1000 else "")
+            except Exception:
+                preview = text[:1000] + ("..." if len(text) > 1000 else "")
 
         else:
+            # неизвестный тип: пробуем прочитать как текст
             try:
                 text = file_bytes.decode("utf-8", errors="ignore")
                 file_type = "text"
                 content = text
-                preview = text[:500] + ("..." if len(text) > 500 else "")
+                preview = text[:1000] + ("..." if len(text) > 1000 else "")
             except:
                 file_type = "binary"
-                content = f"[Binary {name}, {size} bytes]"
+                content = f"[Бинарный файл {name}, размер {size} байт]"
                 preview = content
 
     except Exception as e:
         file_type = "error"
-        content = f"[Error {name}: {e}]"
+        content = f"[Ошибка обработки файла {name}: {e}]"
         preview = content
 
     return {
-        "name": name, "content": content, "type": file_type, "preview": preview,
-        "size": size, "image_data": image_data
+        "name": name,
+        "content": content,
+        "type": file_type,
+        "preview": preview,
+        "size": size
     }
 
 # =========================
-# Построение сообщений и оценка
+# Построение сообщений для API
 # =========================
-def build_api_messages(system_prompt: str, chat_messages: List[Dict[str, Any]], files: List[Dict[str, Any]],
-                       include_files: List[str], use_full_history: bool, limit_messages: int) -> List[Dict[str, str]]:
+def build_api_messages(system_prompt: str,
+                       chat_messages: List[Dict[str, str]],
+                       files: List[Dict[str, Any]],
+                       include_files: List[str],
+                       use_full_history: bool,
+                       limit_messages: int) -> List[Dict[str, str]]:
+    """
+    Формируем список сообщений (system + user/assistant) для отправки в API.
+    include_files — список имён файлов, которые включаем в контекст.
+    use_full_history — если True, используем всю историю; иначе последние limit_messages.
+    """
     messages = [{"role": "system", "content": system_prompt}]
 
+    # Вставляем файлы как отдельные user-сообщения (в порядке загрузки)
     for f in files:
         if f["name"] in include_files:
+            # поместим сначала короткую мета-информацию, затем полный контент
             preview = f.get("preview", "")
+            # При слишком большом размере — можно оставить только preview и ссылку на скачивание
             messages.append({
                 "role": "user",
-                "content": f"[File: {f['name']} (type={f['type']}, size={f['size']} bytes)]\nPreview:\n{preview}\n\nFull:\n{f['content']}"
+                "content": f"[Файл: {f['name']} (type={f['type']}, size={f['size']} bytes)]\nPreview:\n{preview}\n\nFull content:\n{f['content']}"
             })
 
+    # Добавляем историю
     hist = chat_messages if use_full_history else chat_messages[-limit_messages:]
     for m in hist:
         messages.append({"role": m["role"], "content": m["content"]})
@@ -174,49 +179,25 @@ def build_api_messages(system_prompt: str, chat_messages: List[Dict[str, Any]], 
     return messages
 
 def estimate_total_tokens(messages: List[Dict[str, str]]) -> int:
-    total = sum(approx_tokens_from_text(m.get("content", "")) for m in messages)
-    total += len(messages) * 20  # Overhead для ролей/metadata
+    """
+    Простая оценка: суммируем приближённые токены для всех сообщений.
+    """
+    total = 0
+    for m in messages:
+        total += approx_tokens_from_text(m.get("content", ""))
+    # плюс немного служебных токенов
+    total += int(len(messages) * 3)
     return total
 
 # =========================
-# Клиент OpenAI
+# Инициализация Streamlit session_state
 # =========================
-@st.cache_resource
-def get_client(api_key: str) -> Optional[OpenAI]:
-    if not api_key:
-        return None
-    try:
-        return OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-    except Exception as e:
-        st.error(f"Ошибка клиента: {e}")
-        return None
-
-# =========================
-# Инициализация session_state
-# =========================
-st.set_page_config(page_title="🤖 Sonoma Chat", page_icon="🤖", layout="wide", initial_sidebar_state="expanded")
-
-# CSS стилизация
-st.markdown("""
-<style>
-.main { background-color: #f0f2f6; padding: 1rem; }
-.stChatMessage { padding: 1rem; border-radius: 15px; margin: 0.5rem 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-.user-bubble { background-color: #007bff; color: white; border-radius: 15px 15px 5px 15px; }
-.assistant-bubble { background-color: #e9ecef; color: black; border-radius: 15px 15px 15px 5px; }
-.sidebar .stButton > button { background-color: #28a745; color: white; border-radius: 8px; border: none; padding: 0.5rem 1rem; }
-.sidebar .stButton > button:hover { background-color: #218838; }
-.token-ok { color: green; }
-.token-warning { color: orange; font-weight: bold; }
-.token-error { color: red; font-weight: bold; }
-.file-preview { max-height: 150px; overflow-y: auto; background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 5px; padding: 10px; font-size: 0.9em; }
-.expander-header { font-weight: bold; color: #495057; }
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="🤖 Мульти-Чат (Sonoma)", page_icon="🤖", layout="wide")
 
 if "messages" not in st.session_state:
-    st.session_state.messages = []
+    st.session_state.messages = []  # список dict {"role": "user"/"assistant", "content": "...", "ts": ...}
 if "files" not in st.session_state:
-    st.session_state.files = []
+    st.session_state.files = []  # список dict возвращаемых process_file_bytes + {"include": True}
 if "max_tokens" not in st.session_state:
     st.session_state.max_tokens = DEFAULT_MAX_TOKENS_RESPONSE
 if "temperature" not in st.session_state:
@@ -232,274 +213,329 @@ if "use_full_history" not in st.session_state:
 if "limit_messages" not in st.session_state:
     st.session_state.limit_messages = 50
 if "include_files" not in st.session_state:
-    st.session_state.include_files = []
+    st.session_state.include_files = []  # имена файлов включённые в контекст
 if "api_key" not in st.session_state:
-    st.session_state.api_key = ""
-
-# Обрезаем историю, если слишком большая (>1000 сообщений)
-if len(st.session_state.messages) > 1000:
-    st.session_state.messages = st.session_state.messages[-500:]
-    st.info("История обрезана для производительности.")
+    st.session_state.api_key = st.secrets.get("OPENROUTER_API_KEY") or ""
 
 # =========================
-# Sidebar рендер
+# Sidebar — настройки
 # =========================
-def render_sidebar():
-    with st.sidebar:
-        st.header("⚙️ Настройки")
+with st.sidebar:
+    st.header("⚙️ Настройки")
 
+    st.markdown("**Модель**: " + MODEL_NAME)
+    st.write("Окно контекста модели: **2 000 000** токенов (приближённо).")
 
-        # Модель и контекст (info)
-        with st.expander("ℹ️ Инфо о модели", expanded=False):
-            st.markdown(f"**Модель:** {MODEL_NAME}")
-            st.markdown(f"**Контекст:** до {MODEL_CONTEXT_TOKENS:,} токенов")
-            st.caption("Настройки ниже влияют на ответы. Для больших файлов — включай их по одному.")
+    # max tokens (ответ)
+    st.session_state.max_tokens = st.slider(
+        "📏 Макс. токенов для ответа",
+        min_value=256,
+        max_value=MODEL_CONTEXT_TOKENS,
+        value=st.session_state.max_tokens,
+        step=256,
+        help="Максимальное число токенов в *ответе*. Учти, что input + output ≤ 2М."
+    )
 
-        # Настройки слайдеры
-        with st.expander("🎛️ Параметры генерации", expanded=True):
-            st.session_state.max_tokens = st.slider(
-                "📏 Max tokens (ответ)",
-                min_value=256, max_value=MODEL_CONTEXT_TOKENS // 2, value=st.session_state.max_tokens, step=256
-            )
-            st.session_state.temperature = st.slider(
-                "🎨 Temperature (креативность)",
-                min_value=0.0, max_value=1.5, value=st.session_state.temperature, step=0.05
-            )
-            st.session_state.use_full_history = st.checkbox(
-                "📚 Полная история", value=st.session_state.use_full_history
-            )
-            if not st.session_state.use_full_history:
-                st.session_state.limit_messages = st.number_input(
-                    "Последние N сообщений", min_value=1, max_value=500, value=st.session_state.limit_messages
+    # temperature
+    st.session_state.temperature = st.slider(
+        "🎨 Креативность (temperature)",
+        min_value=0.0,
+        max_value=1.5,
+        value=st.session_state.temperature,
+        step=0.05,
+        help="0.0 — максимально точные/детерминированные ответы, 1.5 — более креативно."
+    )
+
+    # режим истории
+    st.session_state.use_full_history = st.checkbox(
+        "📚 Использовать всю историю чата в контексте",
+        value=st.session_state.use_full_history
+    )
+    if not st.session_state.use_full_history:
+        st.session_state.limit_messages = st.number_input(
+            "Последние N сообщений (если не использовать всю историю)",
+            min_value=1, max_value=5000, value=st.session_state.limit_messages
+        )
+
+    st.markdown("---")
+    st.subheader("Файлы")
+    st.write("Загружай файлы — можно выбрать, какие из них включать в контекст.")
+
+    uploaded_files = st.file_uploader(
+        "📁 Загрузить файлы (multi)",
+        accept_multiple_files=True,
+        type=['txt', 'pdf', 'jpg', 'jpeg', 'png', 'csv', 'json', 'py', 'md', 'log'],
+        help="Поддерживаемые: текст, PDF, изображения, CSV, JSON, Python, Markdown. Макс. размер: 50MB на файл (строго проверять не будем)."
+    )
+
+    if uploaded_files:
+        for uf in uploaded_files:
+            try:
+                bytes_data = safe_read_bytes(uf)
+                info = process_file_bytes(uf.name, bytes_data)
+                # добавляем только если ещё нет файла с таким именем
+                if not any(f["name"] == info["name"] for f in st.session_state.files):
+                    info["include"] = True
+                    st.session_state.files.append(info)
+                    st.success(f"Загружен: {info['name']}")
+                else:
+                    st.warning(f"Файл {info['name']} уже загружен.")
+            except Exception as e:
+                st.error(f"Ошибка загрузки {uf.name}: {e}")
+
+    # показать список загруженных файлов с макетом включения/удаления
+    if st.session_state.files:
+        for i, f in enumerate(st.session_state.files):
+            cols = st.columns([6, 1, 1])
+            with cols[0]:
+                st.markdown(f"**{f['name']}** ({f['type']}, {f['size']} bytes)")
+                st.text_area(f"preview_{i}", value=f.get("preview", "")[:2000], height=80, key=f"preview_{i}")
+            with cols[1]:
+                inc = st.checkbox("Включить", value=f.get("include", True), key=f"inc_{i}")
+                st.session_state.files[i]["include"] = inc
+                if inc and f["name"] not in st.session_state.include_files:
+                    st.session_state.include_files.append(f["name"])
+                if not inc and f["name"] in st.session_state.include_files:
+                    st.session_state.include_files.remove(f["name"])
+            with cols[2]:
+                if st.button("Удалить", key=f"del_{i}"):
+                    st.session_state.files.pop(i)
+                    # синхронизировать include_files
+                    st.session_state.include_files = [n for n in st.session_state.include_files if n != f["name"]]
+                    st.experimental_rerun()
+
+    st.markdown("---")
+    st.subheader("Системный промпт")
+    st.session_state.system_prompt = st.text_area("System prompt (используется как system message)", value=st.session_state.system_prompt, height=120)
+
+    st.markdown("---")
+    st.write("Экспорт/импорт чата")
+    if st.button("🔁 Экспортировать чат (JSON)"):
+        data = {
+            "messages": st.session_state.messages,
+            "files": [{k: v for k, v in f.items() if k != "content"} for f in st.session_state.files],
+            "system_prompt": st.session_state.system_prompt
+        }
+        st.download_button("Скачать JSON", data=json.dumps(data, ensure_ascii=False, indent=2), file_name="chat_export.json")
+
+    uploaded_chat = st.file_uploader("Импортировать чат (JSON)", type=["json"], key="upload_chat")
+    if uploaded_chat:
+        try:
+            raw = safe_read_bytes(uploaded_chat).decode("utf-8", errors="ignore")
+            obj = json.loads(raw)
+            if "messages" in obj:
+                st.session_state.messages = obj["messages"]
+            if "files" in obj and isinstance(obj["files"], list):
+                # при импорте файлов — метаданные
+                for imported in obj["files"]:
+                    if not any(f["name"] == imported.get("name") for f in st.session_state.files):
+                        # добавим заглушку без content (пользователь может загрузить файл вновь)
+                        stub = {
+                            "name": imported.get("name"),
+                            "content": imported.get("content", f"[content not available for {imported.get('name')}]"),
+                            "type": imported.get("type", "unknown"),
+                            "preview": imported.get("preview", ""),
+                            "size": imported.get("size", 0),
+                            "include": False
+                        }
+                        st.session_state.files.append(stub)
+                st.success("Чат импортирован (файлы добавлены как метаданные).")
+        except Exception as e:
+            st.error("Ошибка импорта: " + str(e))
+
+# =========================
+# Создаём клиента OpenAI (OpenRouter)
+# =========================
+def get_client(api_key: str) -> Optional[OpenAI]:
+    if not api_key:
+        return None
+    try:
+        return OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+    except Exception as e:
+        st.error(f"Не удалось создать OpenAI клиент: {e}")
+        return None
+
+client = get_client(st.session_state.api_key)
+if client is None:
+    st.warning("Укажите корректный OPENROUTER_API_KEY в сайдбаре, чтобы отправлять запросы к модели.")
+
+# =========================
+# Основная область — чат
+# =========================
+st.title("🤖 Мульти-Чат (Sonoma) — упрощённая и улучшенная версия")
+st.caption("Модель: openrouter/sonoma-sky-alpha — окно контекста до 2M токенов. Все настройки слева.")
+
+# Панель управления чатом: кнопки очистки, экспорт
+top_cols = st.columns([1, 1, 4])
+with top_cols[0]:
+    if st.button("🗑️ Очистить чат"):
+        st.session_state.messages = []
+        st.experimental_rerun()
+with top_cols[1]:
+    if st.button("🗑️ Стереть файлы"):
+        st.session_state.files = []
+        st.session_state.include_files = []
+        st.experimental_rerun()
+with top_cols[2]:
+    # индикатор примерной оценки токенов для текущего контекста
+    api_messages_preview = build_api_messages(
+        st.session_state.system_prompt,
+        st.session_state.messages,
+        st.session_state.files,
+        st.session_state.include_files,
+        st.session_state.use_full_history,
+        st.session_state.limit_messages
+    )
+    approx_tokens = estimate_total_tokens(api_messages_preview)
+    st.markdown(f"**Оценка токенов входного контекста:** ~**{approx_tokens:,}** токенов.  (макс {MODEL_CONTEXT_TOKENS:,})")
+    if approx_tokens + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS:
+        st.error("Внимание: входной контекст + максимальные токены ответа превышают окно модели (2M). Уменьши историю/файлы или max_tokens.")
+
+# Вывод предыдущих сообщений в виде чата
+chat_box = st.container()
+with chat_box:
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            with st.chat_message("user"):
+                st.markdown(msg["content"])
+        else:
+            with st.chat_message("assistant"):
+                st.markdown(msg["content"])
+
+# =========================
+# Ввод нового сообщения
+# =========================
+user_prompt = st.chat_input("Введите сообщение (русский/английский)...")
+if user_prompt:
+    # добавляем сообщение в историю
+    st.session_state.messages.append({"role": "user", "content": user_prompt, "ts": time.time()})
+    # отобразить сразу как пользователь
+    with st.chat_message("user"):
+        st.markdown(user_prompt)
+
+    # создаём placeholder для ответа
+    with st.chat_message("assistant"):
+        placeholder = st.empty()
+        placeholder.markdown("⏳ Отправляю запрос в модель...")
+
+        # Сборка сообщений для API
+        api_messages = build_api_messages(
+            st.session_state.system_prompt,
+            st.session_state.messages,
+            st.session_state.files,
+            st.session_state.include_files,
+            st.session_state.use_full_history,
+            st.session_state.limit_messages
+        )
+
+        # Оценка токенов
+        approx_in_tokens = estimate_total_tokens(api_messages)
+        if approx_in_tokens + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS:
+            # пробуем автоматически сократить: если не используем всю историю — сократить до limit_messages
+            if st.session_state.use_full_history:
+                # предупредить и не отправлять
+                placeholder.markdown(
+                    "⚠️ Размер контекста слишком большой (вместе с ожидаемым ответом превышает окно модели в 2M токенов). "
+                    "Включен режим: использовать всю историю. Пожалуйста, отключи 'Использовать всю историю' в сайдбаре или уменьшь количество файлов/их включение."
                 )
-
-        # System prompt
-        with st.expander("💬 System Prompt", expanded=False):
-            st.session_state.system_prompt = st.text_area(
-                "Системный промпт", value=st.session_state.system_prompt, height=100
-            )
-
-        # Файлы
-        with st.expander("📁 Файлы (max 10)", expanded=True):
-            if len(st.session_state.files) >= MAX_FILES:
-                st.warning(f"Лимит: {MAX_FILES} файлов. Удали некоторые.")
-            uploaded_files = st.file_uploader(
-                "Загрузить", accept_multiple_files=True,
-                type=['txt', 'pdf', 'jpg', 'jpeg', 'png', 'csv', 'json', 'py', 'md', 'log']
-            )
-            if uploaded_files:
-                for uf in uploaded_files:
-                    if len(st.session_state.files) >= MAX_FILES:
-                        st.warning("Достигнут лимит файлов.")
-                        break
-                    try:
-                        bytes_data = safe_read_bytes(uf)
-                        if len(bytes_data) > MAX_FILE_SIZE:
-                            st.error(f"{uf.name}: слишком большой (>50MB)")
-                            continue
-                        info = process_file_bytes(uf.name, bytes_data)
-                        if not any(f["name"] == info["name"] for f in st.session_state.files):
-                            info["include"] = True
-                            st.session_state.files.append(info)
-                            st.success(f"Загружен: {info['name']}")
-                        else:
-                            st.warning(f"{info['name']} уже есть.")
-                    except Exception as e:
-                        st.error(f"Ошибка {uf.name}: {e}")
-
-            # Список файлов
-            if st.session_state.files:
-                st.subheader("Загруженные файлы")
-                for i, f in enumerate(st.session_state.files):
-                    cols = st.columns([5, 1, 1])
-                    with cols[0]:
-                        st.markdown(f"**{f['name']}** ({f['type']}, {f['size']/1024:.1f} KB)")
-                        if f['type'] == 'image' and f.get('image_data'):
-                            st.image(f"data:image/png;base64,{f['image_data']}", width=100, caption="Preview")
-                        else:
-                            st.caption(f["preview"][:200] + "..." if len(f["preview"]) > 200 else f["preview"], help="Короткий предпросмотр")
-                    with cols[1]:
-                        inc = st.checkbox("Вкл.", value=f.get("include", True), key=f"inc_{i}")
-                        f["include"] = inc
-                        if inc and f["name"] not in st.session_state.include_files:
-                            st.session_state.include_files.append(f["name"])
-                        elif not inc and f["name"] in st.session_state.include_files:
-                            st.session_state.include_files.remove(f["name"])
-                    with cols[2]:
-                        if st.button("🗑️", key=f"del_{i}"):
-                            st.session_state.files.pop(i)
-                            st.session_state.include_files = [n for n in st.session_state.include_files if n != f["name"]]
-                            st.rerun()
-
-        # Экспорт/Импорт
-        with st.expander("💾 Экспорт/Импорт", expanded=False):
-            if st.button("📤 Экспорт JSON"):
-                data = {
-                    "messages": st.session_state.messages,
-                    "files": [{k: v for k, v in f.items() if k not in ["content", "image_data"]} for f in st.session_state.files],  # Без тяжёлого content
-                    "system_prompt": st.session_state.system_prompt
-                }
-                st.download_button("Скачать JSON", json.dumps(data, ensure_ascii=False, indent=2), "chat.json", "application/json")
-
-            if st.button("📥 TXT чата"):
-                buf = io.StringIO()
-                for m in st.session_state.messages:
-                    role = "👤 User" if m["role"] == "user" else "🤖 Assistant"
-                    ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(m.get("ts", time.time())))
-                    buf.write(f"{role} ({ts}):\n{m['content']}\n{'-'*80}\n\n")
-                st.download_button("Скачать TXT", buf.getvalue(), "chat.txt", "text/plain")
-
-            uploaded_chat = st.file_uploader("Импорт JSON", type=["json"])
-            if uploaded_chat:
-                try:
-                    raw = safe_read_bytes(uploaded_chat).decode("utf-8")
-                    obj = json.loads(raw)
-                    if "messages" in obj:
-                        st.session_state.messages = obj["messages"][-100:]  # Последние 100
-                    if "files" in obj:
-                        for imp in obj["files"]:
-                            if len(st.session_state.files) < MAX_FILES and not any(f["name"] == imp.get("name") for f in st.session_state.files):
-                                stub = {**imp, "content": f"[Content not imported for {imp.get('name')}]", "include": False, "image_data": None}
-                                st.session_state.files.append(stub)
-                    st.success("Импорт завершён.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Ошибка импорта: {e}")
-
-        # Оценка токенов (перенесена сюда)
-        with st.expander("📊 Статистика контекста", expanded=False):
-            api_messages = build_api_messages(
-                st.session_state.system_prompt, st.session_state.messages, st.session_state.files,
-                st.session_state.include_files, st.session_state.use_full_history, st.session_state.limit_messages
-            )
-            approx_tokens = estimate_total_tokens(api_messages)
-            max_allowed = MODEL_CONTEXT_TOKENS - st.session_state.max_tokens
-            if approx_tokens > max_allowed:
-                color = "token-error"
-                msg = f"❌ ~{approx_tokens:,} токенов (превышает лимит {max_allowed:,} для input)"
-            elif approx_tokens > max_allowed * 0.8:
-                color = "token-warning"
-                msg = f"⚠️ ~{approx_tokens:,} токенов (близко к лимиту {max_allowed:,})"
+                st.session_state.messages.append({"role": "assistant", "content": "⚠️ Запрос не отправлен — контекст превышает лимит модели."})
             else:
-                color = "token-ok"
-                msg = f"✅ ~{approx_tokens:,} токенов (ок, лимит {max_allowed:,})"
-            st.markdown(f'<span class="{color}">{msg}</span>', unsafe_allow_html=True)
-            if approx_tokens + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS:
-                st.caption("Совет: Отключи файлы/историю или уменьши max_tokens.")
-
-# =========================
-# Основной чат
-# =========================
-def render_chat():
-    st.title("🤖 Sonoma Chat")
-    st.caption("Упрощённый чат с поддержкой файлов и большим контекстом. Настройки в сайдбаре.")
-
-    # Верхние кнопки (компактно)
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("🗑️ Очистить чат"):
-            st.session_state.messages = []
-            st.rerun()
-    with col2:
-        if st.button("🗑️ Очистить файлы"):
-            st.session_state.files = []
-            st.session_state.include_files = []
-            st.rerun()
-
-    # Вывод чата
-    chat_container = st.container()
-    with chat_container:
-        for msg in st.session_state.messages:
-            if msg["role"] == "user":
-                with st.chat_message("user"):
-                    st.markdown(f'<div class="user-bubble">{msg["content"]}</div>', unsafe_allow_html=True)
-            else:
-                with st.chat_message("assistant"):
-                    st.markdown(f'<div class="assistant-bubble">{msg["content"]}</div>', unsafe_allow_html=True)
-
-    # Ввод
-    user_prompt = st.chat_input("Сообщение (RU/EN)...")
-    if user_prompt:
-        st.session_state.messages.append({"role": "user", "content": user_prompt, "ts": time.time()})
-        with st.chat_message("user"):
-            st.markdown(f'<div class="user-bubble">{user_prompt}</div>', unsafe_allow_html=True)
-
-        with st.chat_message("assistant"):
-            with st.spinner("Генерирую ответ..."):
-                client = get_client(st.session_state.api_key)
-                if client is None:
-                    st.error("Укажи API ключ в сайдбаре.")
-                    st.session_state.messages.append({"role": "assistant", "content": "❌ Нет API ключа.", "ts": time.time()})
-                    st.rerun()
-
-                # Сборка сообщений
+                # пытаемся обрезать историю до половины limit_messages
+                reduced = st.session_state.limit_messages // 2
+                placeholder.markdown(
+                    f"⚠️ Контекст слишком большой — автоматически обрезаю историю до последних {reduced} сообщений и повторяю попытку..."
+                )
                 api_messages = build_api_messages(
-                    st.session_state.system_prompt, st.session_state.messages, st.session_state.files,
-                    st.session_state.include_files, st.session_state.use_full_history, st.session_state.limit_messages
+                    st.session_state.system_prompt,
+                    st.session_state.messages,
+                    st.session_state.files,
+                    st.session_state.include_files,
+                    False,
+                    reduced
                 )
-                approx_in = estimate_total_tokens(api_messages)
-                if approx_in + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS:
-                    if st.session_state.use_full_history:
-                        st.error("Контекст слишком большой. Отключи полную историю в сайдбаре.")
-                        st.session_state.messages.append({"role": "assistant", "content": "⚠️ Превышен лимит — настрой сайдбар.", "ts": time.time()})
-                        st.rerun()
-                    else:
-                        reduced = max(10, st.session_state.limit_messages // 2)
-                        st.info(f"Обрезаю историю до {reduced} сообщений...")
-                        api_messages = build_api_messages(
-                            st.session_state.system_prompt, st.session_state.messages, st.session_state.files,
-                            st.session_state.include_files, False, reduced
-                        )
-                        approx_in = estimate_total_tokens(api_messages)
-                        if approx_in + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS:
-                            st.error("Всё ещё превышает. Уменьши файлы/max_tokens.")
-                            st.session_state.messages.append({"role": "assistant", "content": "❌ Лимит превышен.", "ts": time.time()})
-                            st.rerun()
-
-                # Стриминг запрос
-                message_placeholder = st.empty()
-                full_response = ""
-                try:
-                    stream = client.chat.completions.create(
-                        model=MODEL_NAME,
-                        messages=api_messages,
-                        temperature=st.session_state.temperature,
-                        max_tokens=st.session_state.max_tokens,
-                        stream=True
+                approx_in_tokens = estimate_total_tokens(api_messages)
+                # если всё ещё слишком большой — отказываемся
+                if approx_in_tokens + st.session_state.max_tokens > MODEL_CONTEXT_TOKENS:
+                    placeholder.markdown(
+                        "❌ Всё ещё превышает лимит. Уменьши число файлов, отключи некоторые файлы из контекста, либо уменьшай max_tokens."
                     )
-                    for chunk in stream:
-                        if chunk.choices[0].delta.content is not None:
-                            full_response += chunk.choices[0].delta.content
-                            message_placeholder.markdown(f'<div class="assistant-bubble">{full_response}▌</div>', unsafe_allow_html=True)
-                    st.session_state.messages.append({"role": "assistant", "content": full_response, "ts": time.time()})
-                except Exception as e:
-                    err = f"Ошибка: {e}"
-                    message_placeholder.markdown(f'<div class="assistant-bubble" style="color:red;">{err}</div>', unsafe_allow_html=True)
-                    st.session_state.messages.append({"role": "assistant", "content": err, "ts": time.time()})
-                st.rerun()
+                    st.session_state.messages.append({"role": "assistant", "content": "❌ Запрос не отправлен — контекст превышает лимит модели."})
+                    st.experimental_rerun()
 
-    # Нижние кнопки
-    col3, col4, col5 = st.columns([1, 1, 1])
-    with col3:
-        if st.button("🔁 Повторить последний"):
-            last_user = next((m["content"] for m in reversed(st.session_state.messages) if m["role"] == "user"), None)
-            if last_user:
-                st.session_state.messages.append({"role": "user", "content": last_user, "ts": time.time()})
-                st.rerun()
-            else:
-                st.info("Нет сообщения для повтора.")
-    with col4:
-        if st.button("🗑️ Удалить последнее"):
-            if st.session_state.messages:
-                st.session_state.messages.pop()
-                st.rerun()
-    with col5:
-        st.caption("Подсказка: Для анализа файлов — включи их в сайдбаре.")
+        # Если клиент не настроен
+        if client is None:
+            placeholder.markdown("⚠️ Клиент не настроен: укажите OPENROUTER_API_KEY в сайдбаре.")
+            st.session_state.messages.append({"role": "assistant", "content": "⚠️ Клиент не настроен — укажите API ключ."})
+        else:
+            try:
+                # Отправляем запрос
+                resp = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=api_messages,
+                    temperature=float(st.session_state.temperature),
+                    max_tokens=int(st.session_state.max_tokens)
+                )
+                # Берём ответ
+                # структура: completion.choices[0].message.content
+                reply = ""
+                try:
+                    reply = resp.choices[0].message.content
+                except Exception:
+                    # если структура иная
+                    reply = str(resp)
+                # показываем и сохраняем
+                placeholder.markdown(reply)
+                st.session_state.messages.append({"role": "assistant", "content": reply, "ts": time.time()})
+            except Exception as e:
+                err_text = f"⚠️ Ошибка при вызове модели: {e}"
+                placeholder.markdown(err_text)
+                st.session_state.messages.append({"role": "assistant", "content": err_text})
 
 # =========================
-# Main
+# Нижняя панель: функции управления чатом
 # =========================
-if __name__ == "__main__":
-    render_sidebar()
-    st.divider()
-    render_chat()
+st.markdown("---")
+bot_cols = st.columns([1, 1, 1, 2])
+with bot_cols[0]:
+    if st.button("🔁 Повторить последний ответ"):
+        # попытаемся повторно послать последний пользовательский запрос (если есть)
+        last_user = None
+        for m in reversed(st.session_state.messages):
+            if m["role"] == "user":
+                last_user = m["content"]
+                break
+        if last_user:
+            # удалим последний ассистентский ответ, если есть
+            # добавим копию user в конец и перезапустим (упрощённый путь: имитируем ввод)
+            st.session_state.messages.append({"role": "user", "content": last_user, "ts": time.time()})
+            st.experimental_rerun()
+        else:
+            st.info("Нет пользовательского сообщения для повтора.")
+with bot_cols[1]:
+    if st.button("💾 Сохранить чат (TXT)"):
+        buf = io.StringIO()
+        for m in st.session_state.messages:
+            role = "User" if m["role"] == "user" else "Assistant"
+            ts = m.get("ts", "")
+            buf.write(f"{role} ({ts}):\n{m['content']}\n\n")
+        st.download_button("Скачать TXT", data=buf.getvalue(), file_name="chat.txt", mime="text/plain")
+with bot_cols[2]:
+    if st.button("📥 Очистить последний"):
+        if st.session_state.messages:
+            st.session_state.messages.pop()
+            st.experimental_rerun()
+with bot_cols[3]:
+    st.markdown("**Информация модели / подсказки**")
+    st.write(
+        " - Модель: openrouter/sonoma-sky-alpha\n"
+        " - Контекст до 2M токенов (приблизительно)\n"
+        " - Если ответы кажутся слишком длинными/короткими — настраивай Max tokens и Temperature.\n"
+        " - Для анализа больших файлов включай их в контекст (чекбокс 'Включить' в сайдбаре)."
+    )
+
+# =========================
+# Footer: подсказки
+# =========================
+st.markdown("---")
+st.caption("Совет: если используешь большие PDF/CSV/JSON, включай их по отдельности в контекст — иначе суммарный объём текста может превысить окно модели.")
+
