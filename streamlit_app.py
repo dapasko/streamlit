@@ -226,11 +226,6 @@ with st.sidebar:
     st.markdown("**Модель**: " + MODEL_NAME)
     st.write("Окно контекста модели: **2 000 000** токенов (приближённо).")
 
-    # API ключ
-    api_key_input = st.text_input("API-ключ OpenRouter (OPENROUTER_API_KEY)", value=st.session_state.api_key, type="password")
-    if api_key_input != st.session_state.api_key:
-        st.session_state.api_key = api_key_input
-
     # max tokens (ответ)
     st.session_state.max_tokens = st.slider(
         "📏 Макс. токенов для ответа",
