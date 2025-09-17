@@ -189,6 +189,51 @@ def estimate_total_tokens(messages: List[Dict[str, str]]) -> int:
     return total
 
 # =========================
+# Функция для рендеринга сообщений с подсветкой кода (новое)
+# =========================
+def render_message(msg: Dict[str, Any]):
+    """Рендерит сообщение с поддержкой подсветки кода для assistant."""
+    if msg["role"] == "user":
+        st.markdown(msg["content"])
+    else:  # assistant
+        content = msg["content"]
+        # Простой парсинг Markdown для блоков кода (```lang ... ```)
+        if "```" in content:
+            parts = content.split("```")
+            for i, part in enumerate(parts):
+                if i == 0:
+                    st.markdown(part)
+                elif i % 2 == 1:  # Заголовок языка (игнорируем, но определяем lang)
+                    lang = "python" if "python" in part.lower() else ("json" if "json" in part.lower() else "text")
+                    code_block = parts[i + 1] if i + 1 < len(parts) else ""
+                    st.code(code_block.strip(), language=lang)
+                else:
+                    st.markdown(part)
+        else:
+            st.markdown(content)
+
+# =========================
+# Retry логика для API (новое)
+# =========================
+def safe_chat_completion_with_retry(client, model, messages, temp, max_t, max_retries=3):
+    """API вызов с retry (экспоненциальная задержка)."""
+    for attempt in range(max_retries):
+        try:
+            return client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temp,
+                max_tokens=max_t
+            )
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise e
+            wait_time = (2 ** attempt) + (attempt * 2)  # 2, 6, 14 сек
+            st.warning(f"Попытка {attempt + 1}/{max_retries} неудачна: {str(e)[:100]}. Жду {wait_time}с...")
+            time.sleep(wait_time)
+    return None
+
+# =========================
 # Инициализация Streamlit session_state
 # =========================
 st.set_page_config(page_title="🤖 Мульти-Чат (Sonoma)", page_icon="🤖", layout="wide")
@@ -258,6 +303,14 @@ with st.sidebar:
                 value=st.session_state.limit_messages,
             )
 
+    # --- Поиск по чату (новое) ---
+    st.markdown("---")
+    st.session_state.search_query = st.text_input(
+        "🔍 Поиск по чату",
+        placeholder="Ищи 'Python' или 'ошибка'...",
+        value=getattr(st.session_state, 'search_query', '')
+    )
+
     st.markdown("---")
 
     # --- Файлы ---
@@ -281,13 +334,21 @@ with st.sidebar:
                 except Exception as e:
                     st.error(f"Ошибка загрузки {uf.name}: {e}")
 
+        # Обновляем include_files на основе чекбоксов
+        st.session_state.include_files = []
         for i, f in enumerate(st.session_state.files):
-            with st.expander(f"📄 {f['name']} ({f['type']}, {f['size']}b)"):
-                st.checkbox(
-                    "Включить в контекст",
-                    value=f.get("include", True),
-                    key=f"inc_{i}"
-                )
+            include_key = f"inc_{i}"
+            if st.checkbox(
+                "Включить в контекст",
+                value=f.get("include", True),
+                key=include_key
+            ):
+                st.session_state.include_files.append(f["name"])
+                f["include"] = True
+            else:
+                f["include"] = False
+
+            with st.expander(f"📄 {f['name']} ({f['type']}, {f['size']}b)", expanded=False):
                 st.text_area(
                     "preview",
                     value=f.get("preview", "")[:800],
@@ -296,9 +357,6 @@ with st.sidebar:
                 )
                 if st.button("❌ Удалить", key=f"del_{i}"):
                     st.session_state.files.pop(i)
-                    st.session_state.include_files = [
-                        n for n in st.session_state.include_files if n != f["name"]
-                    ]
                     st.rerun()
 
     # --- Системный промпт ---
@@ -371,7 +429,8 @@ with st.sidebar:
     st.info(
         "🤖 **Модель**: openrouter/sonoma-sky-alpha\n"
         f"📏 Контекст: до {MODEL_CONTEXT_TOKENS:,} токенов\n"
-        "📂 Файлы: включай выборочно, чтобы экономить контекст"
+        "📂 Файлы: включай выборочно, чтобы экономить контекст\n"
+        "🔍 Поиск работает по всей истории чата."
     )
 
 
@@ -424,13 +483,24 @@ with top_cols[2]:
 # Вывод сообщений
 chat_box = st.container()
 with chat_box:
-    for msg in st.session_state.messages:
-        if msg["role"] == "user":
-            with st.chat_message("user"):
-                st.markdown(msg["content"])
+    if st.session_state.search_query.strip():
+        # Поиск: фильтруем сообщения
+        filtered_msgs = [
+            m for m in st.session_state.messages
+            if st.session_state.search_query.lower() in m["content"].lower()
+        ]
+        if filtered_msgs:
+            st.subheader("Результаты поиска")
+            for msg in filtered_msgs:
+                with st.chat_message(msg["role"]):
+                    render_message(msg)
         else:
-            with st.chat_message("assistant"):
-                st.markdown(msg["content"])
+            st.info("Ничего не найдено.")
+    else:
+        # Полная история
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                render_message(msg)
 
 # Ввод сообщения
 user_prompt = st.chat_input("Введите сообщение (русский/английский)...")
@@ -477,20 +547,22 @@ if user_prompt and user_prompt.strip():
                     st.rerun()
         else:
             try:
-                resp = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=api_messages,
-                    temperature=float(st.session_state.temperature),
-                    max_tokens=int(st.session_state.max_tokens)
+                # Используем retry
+                resp = safe_chat_completion_with_retry(
+                    client, MODEL_NAME, api_messages,
+                    float(st.session_state.temperature),
+                    int(st.session_state.max_tokens)
                 )
-                reply = resp.choices[0].message.content if resp.choices else str(resp)
-                placeholder.markdown(reply)
+                reply = resp.choices[0].message.content if resp and resp.choices else "Ошибка в ответе модели."
+                placeholder.empty()
+                with st.chat_message("assistant"):
+                    render_message({"role": "assistant", "content": reply})
                 st.session_state.messages.append({"role": "assistant", "content": reply, "ts": time.time()})
             except Exception as e:
-                err_text = f"⚠️ Ошибка модели: {e}"
+                err_text = f"⚠️ Ошибка модели после retry: {e}"
                 placeholder.markdown(err_text)
                 st.session_state.messages.append({"role": "assistant", "content": err_text})
 
 # Footer
 st.markdown("---")
-st.caption("💡 Совет: Для больших файлов (PDF/CSV/JSON) включай их по отдельности, чтобы не превысить лимит токенов.")
+st.caption("💡 Совет: Для больших файлов (PDF/CSV/JSON) включай их по отдельности, чтобы не превысить лимит токенов. Подсветка кода работает автоматически в ответах.")
