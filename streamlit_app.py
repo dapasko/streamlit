@@ -265,6 +265,27 @@ st.markdown("""
     .stExpander {
         border-radius: 0.5rem;
     }
+
+    /* Улучшения для expander'ов в sidebar */
+    .stExpander {
+        border: 1px solid #374151;
+        border-radius: 0.5rem;
+        margin-bottom: 0.5rem;
+    }
+    .stExpander > div > div > div {
+        background-color: #1f2937;  /* Тёмный фон для содержимого в тёмной теме */
+    }
+    [theme=light] .stExpander > div > div > div {
+        background-color: #f9fafb;
+    }
+    .css-1d391kg {  /* Для мобильного: expander'ы не ломаются */
+        display: block !important;
+    }
+    @media (max-width: 600px) {
+        .stExpander {
+            margin-bottom: 1rem;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -292,144 +313,153 @@ if "api_key" not in st.session_state:
     st.session_state.api_key = st.secrets.get("OPENROUTER_API_KEY") or ""
 
 # =========================
-# Sidebar — настройки
+# Sidebar — настройки (улучшенная версия)
 # =========================
 with st.sidebar:
     st.header("⚙️ Настройки")
 
+    # Основные настройки (видны всегда, компактно)
     st.markdown("**Модель**: " + MODEL_NAME)
-    st.write("Окно контекста модели: **2 000 000** токенов (приближённо).")
+    st.write("Окно контекста: **2 000 000** токенов.")
 
-    # max tokens (ответ)
-    st.session_state.max_tokens = st.slider(
-        "📏 Макс. токенов для ответа",
-        min_value=256,
-        max_value=MODEL_CONTEXT_TOKENS,
-        value=st.session_state.max_tokens,
-        step=256,
-        help="Максимальное число токенов в *ответе*. Учти, что input + output ≤ 2М."
-    )
+    col1, col2 = st.columns(2)
+    with col1:
+        st.session_state.max_tokens = st.slider(
+            "📏 Max tokens (ответ)",
+            min_value=256,
+            max_value=MODEL_CONTEXT_TOKENS,
+            value=st.session_state.max_tokens,
+            step=256,
+            help="Макс. токенов в ответе. Input + output ≤ 2M."
+        )
+    with col2:
+        st.session_state.temperature = st.slider(
+            "🎨 Temperature",
+            min_value=0.0,
+            max_value=1.5,
+            value=st.session_state.temperature,
+            step=0.05,
+            help="0.0 — точные, 1.5 — креативные ответы."
+        )
 
-    # temperature
-    st.session_state.temperature = st.slider(
-        "🎨 Креативность (temperature)",
-        min_value=0.0,
-        max_value=1.5,
-        value=st.session_state.temperature,
-        step=0.05,
-        help="0.0 — максимально точные/детерминированные ответы, 1.5 — более креативно."
-    )
+    # Режим истории (чекбокс + input)
+    col_hist1, col_hist2 = st.columns([3, 2])
+    with col_hist1:
+        st.session_state.use_full_history = st.checkbox(
+            "📚 Вся история в контексте",
+            value=st.session_state.use_full_history
+        )
+    with col_hist2:
+        if not st.session_state.use_full_history:
+            st.session_state.limit_messages = st.number_input(
+                "Последние N сообщений",
+                min_value=1, max_value=5000, value=st.session_state.limit_messages
+            )
 
-    # режим истории
-    st.session_state.use_full_history = st.checkbox(
-        "📚 Использовать всю историю чата в контексте",
-        value=st.session_state.use_full_history
-    )
-    if not st.session_state.use_full_history:
-        st.session_state.limit_messages = st.number_input(
-            "Последние N сообщений (если не использовать всю историю)",
-            min_value=1, max_value=5000, value=st.session_state.limit_messages
+    st.markdown("---")
+
+    # Файлы — в expander (сворачивается)
+    with st.expander("📁 Файлы (загрузка и управление)", expanded=False):
+        st.write("Загружай файлы — выбирай, какие включать в контекст.")
+
+        uploaded_files = st.file_uploader(
+            "📁 Загрузить файлы (multi)",
+            accept_multiple_files=True,
+            type=['txt', 'pdf', 'jpg', 'jpeg', 'png', 'csv', 'json', 'py', 'md', 'log'],
+            help="Поддержка: текст, PDF, изображения, CSV, JSON, Python, Markdown. Макс. 50MB/файл."
+        )
+
+        if uploaded_files:
+            for uf in uploaded_files:
+                try:
+                    bytes_data = safe_read_bytes(uf)
+                    info = process_file_bytes(uf.name, bytes_data)
+                    if not any(f["name"] == info["name"] for f in st.session_state.files):
+                        info["include"] = True
+                        st.session_state.files.append(info)
+                        st.success(f"Загружен: {info['name']}")
+                    else:
+                        st.warning(f"Файл {info['name']} уже загружен.")
+                except Exception as e:
+                    st.error(f"Ошибка загрузки {uf.name}: {e}")
+
+        # Список файлов
+        if st.session_state.files:
+            for i, f in enumerate(st.session_state.files):
+                cols = st.columns([6, 1, 1])
+                with cols[0]:
+                    st.markdown(f"**{f['name']}** ({f['type']}, {f['size']} bytes)")
+                    st.text_area(f"preview_{i}", value=f.get("preview", "")[:2000], height=80, key=f"preview_{i}")
+                with cols[1]:
+                    inc = st.checkbox("Включить", value=f.get("include", True), key=f"inc_{i}")
+                    st.session_state.files[i]["include"] = inc
+                    if inc and f["name"] not in st.session_state.include_files:
+                        st.session_state.include_files.append(f["name"])
+                    if not inc and f["name"] in st.session_state.include_files:
+                        st.session_state.include_files.remove(f["name"])
+                with cols[2]:
+                    if st.button("Удалить", key=f"del_{i}"):
+                        st.session_state.files.pop(i)
+                        st.session_state.include_files = [n for n in st.session_state.include_files if n != f["name"]]
+                        st.rerun()
+
+    st.markdown("---")
+
+    # Системный промпт — в expander
+    with st.expander("🔧 Системный промпт", expanded=False):
+        st.session_state.system_prompt = st.text_area(
+            "System prompt (как system message)",
+            value=st.session_state.system_prompt,
+            height=120,
+            help="По умолчанию: 'You are Sonoma, an experienced fullstack Python developer...'"
         )
 
     st.markdown("---")
-    st.subheader("Файлы")
-    st.write("Загружай файлы — можно выбрать, какие из них включать в контекст.")
 
-    uploaded_files = st.file_uploader(
-        "📁 Загрузить файлы (multi)",
-        accept_multiple_files=True,
-        type=['txt', 'pdf', 'jpg', 'jpeg', 'png', 'csv', 'json', 'py', 'md', 'log'],
-        help="Поддерживаемые: текст, PDF, изображения, CSV, JSON, Python, Markdown. Макс. размер: 50MB на файл (строго проверять не будем)."
-    )
+    # Экспорт/импорт — в expander
+    with st.expander("💾 Экспорт/импорт чата", expanded=False):
+        if st.button("🔁 Экспортировать чат (JSON)"):
+            data = {
+                "messages": st.session_state.messages,
+                "files": [{k: v for k, v in f.items() if k != "content"} for f in st.session_state.files],
+                "system_prompt": st.session_state.system_prompt
+            }
+            st.download_button("Скачать JSON", data=json.dumps(data, ensure_ascii=False, indent=2), file_name="chat_export.json")
 
-    if uploaded_files:
-        for uf in uploaded_files:
+        uploaded_chat = st.file_uploader("Импортировать чат (JSON)", type=["json"], key="upload_chat")
+        if uploaded_chat:
             try:
-                bytes_data = safe_read_bytes(uf)
-                info = process_file_bytes(uf.name, bytes_data)
-                # добавляем только если ещё нет файла с таким именем
-                if not any(f["name"] == info["name"] for f in st.session_state.files):
-                    info["include"] = True
-                    st.session_state.files.append(info)
-                    st.success(f"Загружен: {info['name']}")
-                else:
-                    st.warning(f"Файл {info['name']} уже загружен.")
+                raw = safe_read_bytes(uploaded_chat).decode("utf-8", errors="ignore")
+                obj = json.loads(raw)
+                if "messages" in obj:
+                    st.session_state.messages = obj["messages"]
+                if "files" in obj and isinstance(obj["files"], list):
+                    for imported in obj["files"]:
+                        if not any(f["name"] == imported.get("name") for f in st.session_state.files):
+                            stub = {
+                                "name": imported.get("name"),
+                                "content": imported.get("content", f"[content not available for {imported.get('name')}]"),
+                                "type": imported.get("type", "unknown"),
+                                "preview": imported.get("preview", ""),
+                                "size": imported.get("size", 0),
+                                "include": False
+                            }
+                            st.session_state.files.append(stub)
+                st.success("Чат импортирован (файлы — как метаданные).")
             except Exception as e:
-                st.error(f"Ошибка загрузки {uf.name}: {e}")
+                st.error("Ошибка импорта: " + str(e))
 
-    # показать список загруженных файлов с макетом включения/удаления
-    if st.session_state.files:
-        for i, f in enumerate(st.session_state.files):
-            cols = st.columns([6, 1, 1])
-            with cols[0]:
-                st.markdown(f"**{f['name']}** ({f['type']}, {f['size']} bytes)")
-                st.text_area(f"preview_{i}", value=f.get("preview", "")[:2000], height=80, key=f"preview_{i}")
-            with cols[1]:
-                inc = st.checkbox("Включить", value=f.get("include", True), key=f"inc_{i}")
-                st.session_state.files[i]["include"] = inc
-                if inc and f["name"] not in st.session_state.include_files:
-                    st.session_state.include_files.append(f["name"])
-                if not inc and f["name"] in st.session_state.include_files:
-                    st.session_state.include_files.remove(f["name"])
-            with cols[2]:
-                if st.button("Удалить", key=f"del_{i}"):
-                    st.session_state.files.pop(i)
-                    # синхронизировать include_files
-                    st.session_state.include_files = [n for n in st.session_state.include_files if n != f["name"]]
-                    st.rerun()
-
-    st.markdown("---")
-    st.subheader("Системный промпт")
-    st.session_state.system_prompt = st.text_area("System prompt (используется как system message)", value=st.session_state.system_prompt, height=120)
-
-    st.markdown("---")
-    st.subheader("Экспорт/импорт чата")
-    if st.button("🔁 Экспортировать чат (JSON)"):
-        data = {
-            "messages": st.session_state.messages,
-            "files": [{k: v for k, v in f.items() if k != "content"} for f in st.session_state.files],
-            "system_prompt": st.session_state.system_prompt
-        }
-        st.download_button("Скачать JSON", data=json.dumps(data, ensure_ascii=False, indent=2), file_name="chat_export.json")
-
-    uploaded_chat = st.file_uploader("Импортировать чат (JSON)", type=["json"], key="upload_chat")
-    if uploaded_chat:
-        try:
-            raw = safe_read_bytes(uploaded_chat).decode("utf-8", errors="ignore")
-            obj = json.loads(raw)
-            if "messages" in obj:
-                st.session_state.messages = obj["messages"]
-            if "files" in obj and isinstance(obj["files"], list):
-                # при импорте файлов — метаданные
-                for imported in obj["files"]:
-                    if not any(f["name"] == imported.get("name") for f in st.session_state.files):
-                        # добавим заглушку без content (пользователь может загрузить файл вновь)
-                        stub = {
-                            "name": imported.get("name"),
-                            "content": imported.get("content", f"[content not available for {imported.get('name')}]"),
-                            "type": imported.get("type", "unknown"),
-                            "preview": imported.get("preview", ""),
-                            "size": imported.get("size", 0),
-                            "include": False
-                        }
-                        st.session_state.files.append(stub)
-                st.success("Чат импортирован (файлы добавлены как метаданные).")
-        except Exception as e:
-            st.error("Ошибка импорта: " + str(e))
-
-    # Нижняя панель управления чатом (вынесена в sidebar)
+    # Управление чатом — уже в expander, но уточнил expanded=False
     with st.expander("🛠️ Управление чатом", expanded=False):
         bot_cols = st.columns([1, 1, 1])
         with bot_cols[0]:
             if st.button("🔁 Повторить последний ответ"):
-                # попытаемся повторно послать последний пользовательский запрос (если есть)
                 last_user = None
                 for m in reversed(st.session_state.messages):
                     if m["role"] == "user":
                         last_user = m["content"]
                         break
                 if last_user:
-                    # добавим копию user в конец и перезапустим (упрощённый путь: имитируем ввод)
                     st.session_state.messages.append({"role": "user", "content": last_user, "ts": time.time()})
                     st.rerun()
                 else:
@@ -447,12 +477,13 @@ with st.sidebar:
                 if st.session_state.messages:
                     st.session_state.messages.pop()
                     st.rerun()
-        st.markdown("**Информация модели / подсказки**")
+
+        st.markdown("**Инфо модели:**")
         st.write(
             " - Модель: openrouter/sonoma-sky-alpha\n"
-            " - Контекст до 2M токенов (приблизительно)\n"
-            " - Если ответы кажутся слишком длинными/короткими — настраивай Max tokens и Temperature.\n"
-            " - Для анализа больших файлов включай их в контекст (чекбокс 'Включить')."
+            " - Контекст: до 2M токенов\n"
+            " - Настрой max tokens/temperature для длины/креативности.\n"
+            " - Включай файлы по отдельности для больших объёмов."
         )
 
 # =========================
