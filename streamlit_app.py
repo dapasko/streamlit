@@ -248,8 +248,6 @@ def render_sidebar():
     with st.sidebar:
         st.header("⚙️ Настройки")
 
-        # API Key
-        st.session_state.api_key = st.text_input("🔑 OpenRouter API Key", type="password", value=st.session_state.api_key, help="Введи ключ для доступа к модели.")
 
         # Модель и контекст (info)
         with st.expander("ℹ️ Инфо о модели", expanded=False):
