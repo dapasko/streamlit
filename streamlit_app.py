@@ -1,105 +1,114 @@
 import streamlit as st
 import requests
-import re
-import json
-import time
+import os, json, time
 from pathlib import Path
 
-# ===============================
+# ======================
 # Конфиги
-# ===============================
-OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
+# ======================
 MODEL = "x-ai/grok-4-fast:free"
 API_KEY = st.secrets["OPENROUTER_API_KEY"]
+API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-LOC_LINE_RE = re.compile(r'^(\S+):\d+\s+"(.*)"\s*$')
-MAX_RETRIES = 3
+BATCH_SIZE = 50
+HISTORY_FILE = Path("translation_history.json")
 
 
-# ===============================
+# ======================
 # Функции
-# ===============================
-def extract_entries(lines):
-    """Ищет KEY:0 "Text" строки"""
-    entries = []
-    for i, ln in enumerate(lines):
-        m = LOC_LINE_RE.match(ln)
-        if m:
-            entries.append({"idx": i, "key": m.group(1), "text": m.group(2)})
-    return entries
+# ======================
+def load_history():
+    if HISTORY_FILE.exists():
+        return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+    return {}
 
 
-def build_system_prompt():
-    return (
-        "Translate the given Crusader Kings 3 localisation lines from English to Russian. "
-        "Preserve placeholders like [GetName], $VAR$, #TAG#, {foo}, <icon>. "
-        "Return ONLY JSON array: [{\"original\":\"...\",\"translation\":\"...\"}, ...]"
-    )
+def save_history(history):
+    HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def call_model_batch(texts):
-    system_prompt = build_system_prompt()
-    user_prompt = "Translate these strings:\n" + json.dumps(texts, ensure_ascii=False)
-
-    body = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "temperature": 0.1,
-        "max_tokens": 2000
-    }
+def call_model(batch_lines):
+    """Отправка батча в модель"""
+    messages = [
+        {"role": "system", "content": "Ты переводчик локализаций для Crusader Kings 3. "
+                                      "Переводи только текст в кавычках, сохраняя формат YAML. "
+                                      "Не меняй ключи, не убирай :0, только перевод внутри кавычек."},
+        {"role": "user", "content": "\n".join(batch_lines)}
+    ]
 
     headers = {
         "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:8501",
+        "X-Title": "CK3 Mod Translator"
     }
 
-    for attempt in range(1, MAX_RETRIES+1):
+    data = {
+        "model": MODEL,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": 4000
+    }
+
+    for attempt in range(3):
         try:
-            r = requests.post(OPENROUTER_API, headers=headers, json=body, timeout=60)
+            r = requests.post(API_URL, headers=headers, json=data, timeout=90)
             r.raise_for_status()
             content = r.json()["choices"][0]["message"]["content"]
-            # ищем массив JSON
-            start = content.find("[")
-            parsed = json.loads(content[start:])
-            return [p["translation"] for p in parsed]
+            return content.splitlines()
         except Exception as e:
-            st.warning(f"Ошибка вызова API (попытка {attempt}): {e}")
-            time.sleep(2 * attempt)
+            time.sleep(2 * (attempt+1))
+            if attempt == 2:
+                raise e
     return []
 
 
-def translate_file(filename, content, batch_size=20):
+def translate_file(filename, content):
+    """Основная функция перевода файла"""
     lines = content.splitlines()
-    entries = extract_entries(lines)
+    history = load_history()
 
-    for start in range(0, len(entries), batch_size):
-        batch = entries[start:start+batch_size]
-        texts = [e["text"] for e in batch]
-        translations = call_model_batch(texts)
+    # ключ истории по имени файла
+    file_key = filename
+    if file_key not in history:
+        history[file_key] = {"done_batches": 0, "translated": []}
 
-        for e, tr in zip(batch, translations):
-            safe_tr = tr.replace('"', '\\"')
-            lines[e["idx"]] = f'{e["key"]}:0 "{safe_tr}"'
+    start_batch = history[file_key]["done_batches"]
+    total_batches = (len(lines) + BATCH_SIZE - 1) // BATCH_SIZE
 
-    return "\n".join(lines)
+    for batch_idx in range(start_batch, total_batches):
+        start = batch_idx * BATCH_SIZE
+        end = min((batch_idx+1)*BATCH_SIZE, len(lines))
+        batch_lines = lines[start:end]
+
+        st.info(f"Переводим батч {batch_idx+1}/{total_batches}...")
+        translated_batch = call_model(batch_lines)
+
+        # если модель вернула меньше строк — дополним
+        if len(translated_batch) < len(batch_lines):
+            translated_batch += batch_lines[len(translated_batch):]
+
+        history[file_key]["translated"].extend(translated_batch)
+        history[file_key]["done_batches"] = batch_idx+1
+        save_history(history)
+
+    return "\n".join(history[file_key]["translated"])
 
 
-# ===============================
+# ======================
 # Streamlit UI
-# ===============================
+# ======================
 st.set_page_config(page_title="CK3 Translator", layout="wide")
-st.title("🛠️ Crusader Kings III Translator")
+st.title("🎮 Crusader Kings III Translator (с батчами + историей)")
 
 uploaded = st.file_uploader("Загрузите .yml файл локализации", type=["yml"])
-batch_size = st.slider("Размер батча (строк за один запрос)", 5, 50, 20, 5)
 
 if uploaded and st.button("Перевести"):
     text = uploaded.read().decode("utf-8", errors="replace")
-    st.info("⏳ Переводим...")
-    translated = translate_file(uploaded.name, text, batch_size)
+    st.info("⏳ Начинаем перевод...")
+
+    translated = translate_file(uploaded.name, text)
+
     st.success("✅ Перевод готов!")
 
     out_name = "l_russian_" + Path(uploaded.name).name
@@ -109,3 +118,5 @@ if uploaded and st.button("Перевести"):
         file_name=out_name,
         mime="text/plain"
     )
+
+    st.info(f"История сохранена в {HISTORY_FILE}")
