@@ -3,6 +3,7 @@ import requests
 import re
 import time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ======================
 # Конфиги
@@ -11,7 +12,8 @@ MODEL = "x-ai/grok-4-fast:free"
 API_KEY = st.secrets["OPENROUTER_API_KEY"]
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-BATCH_SIZE = 50
+BATCH_SIZE = 100      # размер батча (чем больше, тем меньше запросов)
+MAX_WORKERS = 3       # сколько батчей обрабатываем параллельно
 
 # История переводов в памяти
 history = {}
@@ -24,7 +26,6 @@ def clean_translation(text: str) -> str:
     lines = text.splitlines()
     cleaned = []
     for line in lines:
-        # Удаляем дубли
         if line.strip() in cleaned:
             continue
 
@@ -36,7 +37,6 @@ def clean_translation(text: str) -> str:
 
         cleaned.append(line)
 
-    # Проверка на английский текст
     for l in cleaned:
         if re.search(r"[A-Za-z]", l) and not l.startswith("l_russian"):
             print("⚠️ Остался английский:", l)
@@ -69,7 +69,7 @@ def call_model(batch_lines):
         "model": MODEL,
         "messages": messages,
         "temperature": 0.2,
-        "max_tokens": 4000
+        "max_tokens": 20000
     }
 
     for attempt in range(3):
@@ -93,31 +93,47 @@ def call_model(batch_lines):
 # ======================
 def translate_file(filename, content):
     lines = content.splitlines()
-
-    # Ключ истории по имени файла
     file_key = filename
     if file_key not in history:
         history[file_key] = {"done_batches": 0, "translated": []}
 
-    start_batch = history[file_key]["done_batches"]
     total_batches = (len(lines) + BATCH_SIZE - 1) // BATCH_SIZE
+    st.info(f"Всего батчей: {total_batches}")
 
-    for batch_idx in range(start_batch, total_batches):
+    progress = st.progress(0)
+    log_area = st.empty()
+
+    batches = []
+    for batch_idx in range(total_batches):
         start = batch_idx * BATCH_SIZE
         end = min((batch_idx + 1) * BATCH_SIZE, len(lines))
-        batch_lines = lines[start:end]
+        batches.append((batch_idx, lines[start:end]))
 
-        print(f"➡️ Переводим батч {batch_idx+1}/{total_batches} ({start}-{end})")
-        translated_batch = call_model(batch_lines)
+    results = [None] * len(batches)
 
-        # если модель вернула меньше строк — дополним
-        if len(translated_batch) < len(batch_lines):
-            translated_batch += batch_lines[len(translated_batch):]
+    # параллельно обрабатываем несколько батчей
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_idx = {executor.submit(call_model, b[1]): b[0] for b in batches}
+        done_count = 0
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                translated_batch = future.result()
+                results[idx] = translated_batch
+                log_area.text(f"✅ Батч {idx+1}/{total_batches} готов")
+            except Exception as e:
+                log_area.text(f"⚠️ Ошибка в батче {idx+1}: {e}")
+                results[idx] = batches[idx][1]  # если ошибка, оставляем оригинал
 
-        history[file_key]["translated"].extend(translated_batch)
-        history[file_key]["done_batches"] = batch_idx + 1
+            done_count += 1
+            progress.progress(done_count / total_batches)
 
-    final_text = "\n".join(history[file_key]["translated"])
+    # собираем перевод обратно
+    translated = []
+    for batch_lines in results:
+        translated.extend(batch_lines)
+
+    final_text = "\n".join(translated)
     final_text = clean_translation(final_text)
     return final_text
 
@@ -126,7 +142,7 @@ def translate_file(filename, content):
 # Streamlit UI
 # ======================
 st.set_page_config(page_title="CK3 Translator", layout="wide")
-st.title("🎮 Crusader Kings III Translator (батчи + пост-обработка)")
+st.title("🎮 Crusader Kings III Translator (батчи + параллель + пост-обработка)")
 
 uploaded = st.file_uploader("Загрузите .yml файл локализации", type=["yml"])
 
@@ -146,4 +162,4 @@ if uploaded and st.button("Перевести"):
         mime="text/plain"
     )
 
-    st.info("ℹ️ Логи процесса смотрите в консоли (терминале)")
+    st.info("ℹ️ Логи процесса смотрите в консоли и ниже во время работы")
